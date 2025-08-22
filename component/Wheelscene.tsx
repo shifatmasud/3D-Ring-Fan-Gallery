@@ -65,12 +65,12 @@ export class WheelScene {
     pointerVelocity = 0;
     rotationSpeed = 0; // Current coasting speed
     lastRotation = 0;
-    friction = 0.96; // Damping factor for inertia. Higher is smoother/longer.
+    friction = 0.90; // Damping factor for inertia. Lower value = more friction/stops faster.
     clickThreshold = 10; // Max pixels moved to be considered a click
-    dragSensitivity = 0.009; // Controls how much the wheel rotates per pixel dragged.
-    flickSensitivity = 0.045; // Multiplier for the flick gesture.
+    dragSensitivity = 0.015; // Controls how much the wheel rotates per pixel dragged.
+    flickSensitivity = 0.01; // Multiplier for the flick gesture.
     scrollSensitivity = 0.0009;
-    idleRotationSpeed = 0.0002; // A very slow constant rotation when idle.
+    idleRotationSpeed = 0; // A very slow constant rotation when idle.
 
     // --- Pinch-to-Zoom State ---
     activePointers: PointerEvent[] = [];

@@ -12,7 +12,7 @@
 
 import * as React from "react"
 import { addPropertyControls, ControlType } from "framer"
-import { WheelScene } from "../3dwheel"
+import { WheelScene } from "./Wheelscene"
 
 // --- Type Definitions ---
 type Item = {
