@@ -3,12 +3,12 @@ import Ringfan from "./component/Ringfan"
 
 // Create 20 unique items for the Ringfan component
 const defaultItems = [
-    { image: "https://images.unsplash.com/photo-1614730321146-b6fa6a46bcb4?q=80&w=400", link: "#", openInNewTab: true },
-    { image: "https://images.unsplash.com/photo-1614729939124-037424f73448?q=80&w=400", link: "#", openInNewTab: true },
-    { image: "https://images.unsplash.com/photo-1614728263952-84ea256ec677?q=80&w=400", link: "#", openInNewTab: true },
-    { image: "https://images.unsplash.com/photo-1614726333425-9938b8197992?q=80&w=400", link: "#", openInNewTab: true },
+    { image: "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?q=80&w=400", link: "#", openInNewTab: true },
+    { image: "https://images.unsplash.com/photo-1475924156734-496f6cac6ec1?q=80&w=400", link: "#", openInNewTab: true },
+    { image: "https://images.unsplash.com/photo-1418065460487-3e41a6c84dc5?q=80&w=400", link: "#", openInNewTab: true },
+    { image: "https://images.unsplash.com/photo-1475113548554-5a36f1f523d6?q=80&w=400", link: "#", openInNewTab: true },
     { image: "https://images.unsplash.com/photo-1543722530-53483917993a?q=80&w=400", link: "#", openInNewTab: true },
-    { image: "https://images.unsplash.com/photo-1630839262953-f343a388b348?q=80&w=400", link: "#", openInNewTab: true },
+    { image: "https://images.unsplash.com/photo-1473773508845-188df298d2d1?q=80&w=400", link: "#", openInNewTab: true },
     { image: "https://images.unsplash.com/photo-1570642152142-5f65b533a38f?q=80&w=400", link: "#", openInNewTab: true },
     { image: "https://images.unsplash.com/photo-1534796636912-3b95b3ab5986?q=80&w=400", link: "#", openInNewTab: true },
     { image: "https://images.unsplash.com/photo-1516259762288-5904a8208c84?q=80&w=400", link: "#", openInNewTab: true },
