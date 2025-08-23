@@ -39,7 +39,7 @@ export default function Ringfan(props: Ringfan) {
         cardWidth = 1.2,
         cardHeight = 1.8,
         borderRadius = 0.05,
-        backgroundColor = "#111111",
+        backgroundColor = "#ffffff",
         tiltAngle = 0.17,
     } = props
 
@@ -98,6 +98,6 @@ addPropertyControls(Ringfan, {
     cardWidth: { type: ControlType.Number, title: "Card Width", defaultValue: 1.2, min: 0.1, max: 10, step: 0.1 },
     cardHeight: { type: ControlType.Number, title: "Card Height", defaultValue: 1.8, min: 0.1, max: 10, step: 0.1 },
     borderRadius: { type: ControlType.Number, title: "Card Radius", defaultValue: 0.05, min: 0, max: 0.5, step: 0.01 },
-    backgroundColor: { type: ControlType.Color, title: "Background", defaultValue: "#111111" },
+    backgroundColor: { type: ControlType.Color, title: "Background", defaultValue: "#ffffff" },
     tiltAngle: { type: ControlType.Number, title: "Tilt Angle", defaultValue: 0.17, min: -0.5, max: 0.5, step: 0.05 },
 })

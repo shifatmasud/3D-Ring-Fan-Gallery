@@ -35,11 +35,11 @@ export function App() {
             style={{
                 width: "100vw",
                 height: "100vh",
-                backgroundColor: "#111111",
-                color: "#ffffff",
+                backgroundColor: "#ffffff",
+                color: "#000000",
             }}
         >
-            <Ringfan items={defaultItems} backgroundColor="#111111" wheelRadius={4} />
+            <Ringfan items={defaultItems} backgroundColor="#ffffff" wheelRadius={4} />
         </div>
     )
 }

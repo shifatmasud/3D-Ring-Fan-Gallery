@@ -3,7 +3,32 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import * as THREE from "three";
+import {
+    ACESFilmicToneMapping,
+    AmbientLight,
+    Clock,
+    Color,
+    DirectionalLight,
+    Euler,
+    ExtrudeGeometry,
+    Group,
+    MathUtils,
+    Mesh,
+    MeshPhysicalMaterial,
+    PerspectiveCamera,
+    Quaternion,
+    Raycaster,
+    Scene,
+    Shape,
+    SRGBColorSpace,
+    TextureLoader,
+    Vector2,
+    Vector3,
+    WebGLRenderer,
+    ClampToEdgeWrapping,
+    LinearFilter,
+} from "three";
+
 
 // --- Type Definitions ---
 type Item = {
@@ -29,10 +54,10 @@ type WheelSceneProps = {
  * @param {number} w Width of the rectangle.
  * @param {number} h Height of the rectangle.
  * @param {number} r Border radius.
- * @returns {THREE.Shape} A THREE.Shape object.
+ * @returns {Shape} A THREE.Shape object.
  */
 const createRoundedRectShape = (w: number, h: number, r: number) => {
-    const shape = new THREE.Shape();
+    const shape = new Shape();
     const radius = Math.min(r, w / 2, h / 2);
     shape.moveTo(-w / 2 + radius, h / 2);
     shape.lineTo(w / 2 - radius, h / 2);
@@ -50,12 +75,12 @@ export class WheelScene {
     // --- Scene components ---
     container: HTMLDivElement;
     props: WheelSceneProps;
-    clock: THREE.Clock;
-    raycaster: THREE.Raycaster;
-    renderer: THREE.WebGLRenderer;
-    scene: THREE.Scene;
-    camera: THREE.PerspectiveCamera;
-    group: THREE.Group;
+    clock: Clock;
+    raycaster: Raycaster;
+    renderer: WebGLRenderer;
+    scene: Scene;
+    camera: PerspectiveCamera;
+    group: Group;
     animationFrameId: number;
 
     // --- Interaction & Physics State ---
@@ -80,8 +105,8 @@ export class WheelScene {
     maxZoom = 0;
 
     // --- Hover & Immersive State ---
-    hoveredMesh: THREE.Mesh | null = null;
-    immersiveMesh: THREE.Mesh | null = null;
+    hoveredMesh: Mesh | null = null;
+    immersiveMesh: Mesh | null = null;
     animationSpeed = 0.06; // Speed for lerp animations (hover, focus). Lower is slower.
 
     constructor(container: HTMLDivElement, props: WheelSceneProps) {
@@ -94,36 +119,38 @@ export class WheelScene {
         if (!this.container) return;
 
         // --- Core Components ---
-        this.clock = new THREE.Clock();
-        this.raycaster = new THREE.Raycaster();
+        this.clock = new Clock();
+        this.raycaster = new Raycaster();
 
         // --- Renderer, Scene, Camera Setup ---
-        this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        this.renderer = new WebGLRenderer({ antialias: true, alpha: true });
         this.renderer.setPixelRatio(window.devicePixelRatio);
         this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
-        this.renderer.setClearColor(new THREE.Color(this.props.backgroundColor), 1);
-        this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+        this.renderer.setClearColor(new Color(this.props.backgroundColor), 1);
+        this.renderer.outputColorSpace = SRGBColorSpace;
+        this.renderer.toneMapping = ACESFilmicToneMapping;
         this.container.appendChild(this.renderer.domElement);
         this.container.style.cursor = "grab";
         this.container.style.touchAction = "none"; // Recommended for pointer events
 
-        this.scene = new THREE.Scene();
-        this.camera = new THREE.PerspectiveCamera(75, this.container.clientWidth / this.container.clientHeight, 0.1, 1000);
-        const baseZoom = this.props.wheelRadius * 2.2;
-        this.minZoom = this.props.wheelRadius * 1.5;
-        this.maxZoom = this.props.wheelRadius * 4.0;
+        this.scene = new Scene();
+        this.scene.background = new Color(this.props.backgroundColor);
+        this.camera = new PerspectiveCamera(55, this.container.clientWidth / this.container.clientHeight, 0.1, 1000);
+        const baseZoom = this.props.wheelRadius * 2.8;
+        this.minZoom = this.props.wheelRadius * 2.0;
+        this.maxZoom = this.props.wheelRadius * 5.0;
         this.camera.position.set(0, 0, baseZoom);
         this.camera.lookAt(0, 0, 0);
 
         // --- Lighting ---
-        this.scene.add(new THREE.AmbientLight(0xffffff, 0.9));
-        this.scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.5));
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
-        dirLight.position.set(5, 10, 7);
-        this.scene.add(dirLight);
+        // Bright, clean lighting for a white background
+        this.scene.add(new AmbientLight(0xffffff, 1.2));
+        const mainLight = new DirectionalLight(0xffffff, 1.5);
+        mainLight.position.set(0, 10, 10);
+        this.scene.add(mainLight);
 
         // --- Card Group ---
-        this.group = new THREE.Group();
+        this.group = new Group();
         this.group.rotation.order = "YXZ";
         this.group.rotation.x = this.props.tiltAngle;
         this.scene.add(this.group);
@@ -136,56 +163,71 @@ export class WheelScene {
 
     createCards() {
         const { items, cardWidth, cardHeight, borderRadius, wheelRadius, tiltAngle } = this.props;
-        const textureLoader = new THREE.TextureLoader();
+        const textureLoader = new TextureLoader();
+
+        const cardBaseMaterial = new MeshPhysicalMaterial({
+            color: new Color("#ffffff"),
+            roughness: 0.4,
+            metalness: 0.0,
+            clearcoat: 0.1,
+            clearcoatRoughness: 0.3,
+            transparent: true, // Required for opacity animation
+        });
 
         items.forEach((item, i) => {
-            const frontMaterial = new THREE.MeshStandardMaterial({
-                color: 0xcccccc,
-                roughness: 0.7,
-                metalness: 0.1,
-                transparent: true, // For opacity animations
-            });
+            const frontMaterial = cardBaseMaterial.clone();
 
             textureLoader.load(item.image, (texture) => {
-                // Prevent texture stretching by covering the card area
-                const imageAspect = texture.image.width / texture.image.height;
+                // This approach avoids stretching by adjusting the texture's scale (repeat)
+                // and position (offset) to cover the card area, cropping the image as needed.
                 const cardAspect = cardWidth / cardHeight;
-                
-                texture.wrapS = THREE.RepeatWrapping;
-                texture.wrapT = THREE.RepeatWrapping;
+                const imageAspect = texture.image.width / texture.image.height;
 
                 if (imageAspect > cardAspect) {
-                    // Image is wider than card, so scale texture height to fit and center width
-                    texture.repeat.set(cardAspect / imageAspect, 1);
-                    texture.offset.set((1 - (cardAspect / imageAspect)) / 2, 0);
+                    // Image is wider than card, so scale texture to fit height and crop width
+                    texture.repeat.x = cardAspect / imageAspect;
+                    texture.offset.x = (1 - texture.repeat.x) / 2;
                 } else {
-                    // Image is taller than card, so scale texture width to fit and center height
-                    texture.repeat.set(1, imageAspect / cardAspect);
-                    texture.offset.set(0, (1 - (imageAspect / cardAspect)) / 2);
+                    // Image is taller than card, so scale texture to fit width and crop height
+                    texture.repeat.y = imageAspect / cardAspect;
+                    texture.offset.y = (1 - texture.repeat.y) / 2;
                 }
+
+                texture.minFilter = LinearFilter;
+                texture.magFilter = LinearFilter;
+                texture.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+                texture.colorSpace = SRGBColorSpace;
+                texture.wrapS = ClampToEdgeWrapping;
+                texture.wrapT = ClampToEdgeWrapping;
                 
-                texture.colorSpace = THREE.SRGBColorSpace;
                 frontMaterial.map = texture;
                 frontMaterial.needsUpdate = true;
             });
 
             const shape = createRoundedRectShape(cardWidth, cardHeight, borderRadius);
-            const geometry = new THREE.ExtrudeGeometry(shape, { depth: 0.05, bevelEnabled: false });
-            const sideMaterial = new THREE.MeshStandardMaterial({ color: 0x555555, transparent: true });
-            const mesh = new THREE.Mesh(geometry, [frontMaterial, sideMaterial]);
+            const geometry = new ExtrudeGeometry(shape, { depth: 0.05, bevelEnabled: false });
+
+            const sideMaterial = cardBaseMaterial.clone();
+            (sideMaterial.color as Color).set(0xf0f0f0); // Light grey for the card edges
+
+            const mesh = new Mesh(geometry, [frontMaterial, sideMaterial]);
 
             const angle = (i / items.length) * Math.PI * 2;
-            const position = new THREE.Vector3(Math.sin(angle) * wheelRadius, 0, Math.cos(angle) * wheelRadius);
+            const position = new Vector3(Math.sin(angle) * wheelRadius, 0, Math.cos(angle) * wheelRadius);
             mesh.position.copy(position);
-            
+
             // Store original state for animations
-            const euler = new THREE.Euler(tiltAngle, angle + Math.PI / 2, 0, "YXZ");
-            mesh.userData = { 
+            const euler = new Euler(tiltAngle, angle + Math.PI / 2, 0, "YXZ");
+            mesh.userData = {
                 item,
                 originalPosition: position.clone(),
-                originalQuaternion: new THREE.Quaternion().setFromEuler(euler),
+                originalQuaternion: new Quaternion().setFromEuler(euler),
                 isFadingOut: false,
-             };
+                physics: {
+                    angle: 0,
+                    velocity: 0,
+                },
+            };
 
             mesh.quaternion.copy(mesh.userData.originalQuaternion);
             this.group.add(mesh);
@@ -216,11 +258,15 @@ export class WheelScene {
         }
         this.renderer.dispose();
         this.group.children.forEach((child) => {
-            if (child instanceof THREE.Mesh) {
+            if (child instanceof Mesh) {
                 child.geometry.dispose();
                 if (Array.isArray(child.material)) {
-                    child.material.forEach((mat) => mat.dispose());
+                    child.material.forEach((mat) => {
+                        if (mat.map) mat.map.dispose();
+                        mat.dispose();
+                    });
                 } else {
+                    if (child.material.map) child.material.map.dispose();
                     child.material.dispose();
                 }
             }
@@ -257,7 +303,7 @@ export class WheelScene {
         if (!e.isPrimary) return;
 
         if (this.immersiveMesh) {
-             const pointer = new THREE.Vector2();
+            const pointer = new Vector2();
             pointer.x = (e.clientX / this.container.clientWidth) * 2 - 1;
             pointer.y = -(e.clientY / this.container.clientHeight) * 2 + 1;
             this.raycaster.setFromCamera(pointer, this.camera);
@@ -279,13 +325,13 @@ export class WheelScene {
 
     onPointerUp = (e: PointerEvent) => {
         if (!e.isPrimary) return;
-        
+
         const dragDistance = Math.hypot(e.clientX - this.dragStart.x, e.clientY - this.dragStart.y);
 
         if (dragDistance < this.clickThreshold) {
             // It's a click
             if (this.immersiveMesh) {
-                const pointer = new THREE.Vector2();
+                const pointer = new Vector2();
                 pointer.x = (e.clientX / this.container.clientWidth) * 2 - 1;
                 pointer.y = -(e.clientY / this.container.clientHeight) * 2 + 1;
                 this.raycaster.setFromCamera(pointer, this.camera);
@@ -328,7 +374,7 @@ export class WheelScene {
 
         if (e.ctrlKey) { // For trackpad pinch-to-zoom and ctrl+scroll zoom
             const zoomAmount = e.deltaY * 0.025;
-            this.camera.position.z = THREE.MathUtils.clamp(
+            this.camera.position.z = MathUtils.clamp(
                 this.camera.position.z + zoomAmount,
                 this.minZoom,
                 this.maxZoom
@@ -344,14 +390,14 @@ export class WheelScene {
             return;
         };
 
-        const pointer = new THREE.Vector2();
+        const pointer = new Vector2();
         pointer.x = (e.clientX / this.container.clientWidth) * 2 - 1;
         pointer.y = -(e.clientY / this.container.clientHeight) * 2 + 1;
         this.raycaster.setFromCamera(pointer, this.camera);
         const intersects = this.raycaster.intersectObjects(this.group.children);
 
         if (intersects.length > 0) {
-            const intersectedMesh = intersects[0].object as THREE.Mesh;
+            const intersectedMesh = intersects[0].object as Mesh;
             if (this.hoveredMesh !== intersectedMesh) {
                 this.clearHover();
                 this.hoveredMesh = intersectedMesh;
@@ -371,14 +417,14 @@ export class WheelScene {
         }
     };
 
-    enterImmersive = (mesh: THREE.Mesh) => {
+    enterImmersive = (mesh: Mesh) => {
         if (this.immersiveMesh) return;
         this.immersiveMesh = mesh;
         this.clearHover();
         this.rotationSpeed = 0;
 
         this.group.children.forEach(child => {
-            const childMesh = child as THREE.Mesh;
+            const childMesh = child as Mesh;
             childMesh.userData.isFadingOut = (childMesh !== this.immersiveMesh);
         });
     }
@@ -389,7 +435,7 @@ export class WheelScene {
         this.container.style.cursor = "grab";
 
         this.group.children.forEach(child => {
-            (child as THREE.Mesh).userData.isFadingOut = false;
+            (child as Mesh).userData.isFadingOut = false;
         });
     }
 
@@ -410,41 +456,64 @@ export class WheelScene {
         }
         // When dragging, rotation is handled directly in onPointerMove
 
-        // --- Immersive/Animation Logic ---
-        const targetLocalQuaternion = this.group.quaternion.clone().invert();
-
+        // --- Per-Card Animation & Physics ---
         this.group.children.forEach(child => {
-            const mesh = child as THREE.Mesh;
-            
+            const mesh = child as Mesh;
+
             // --- Immersive Card Animation ---
             if (this.immersiveMesh === mesh) {
-                const targetWorldPosition = new THREE.Vector3(0, 0, this.camera.position.z - this.props.cardWidth * 1.5);
+                // Reset physics state so it doesn't jump when exiting immersive mode
+                if (mesh.userData.physics) {
+                    mesh.userData.physics.angle = 0;
+                    mesh.userData.physics.velocity = 0;
+                }
+                const targetWorldPosition = new Vector3(0, 0, this.camera.position.z - this.props.cardWidth * 1.5);
                 const targetLocalPosition = this.group.worldToLocal(targetWorldPosition.clone());
                 mesh.position.lerp(targetLocalPosition, this.animationSpeed);
+
+                const targetLocalQuaternion = this.group.quaternion.clone().invert();
                 mesh.quaternion.slerp(targetLocalQuaternion, this.animationSpeed);
-            } 
-            // --- Non-Immersive Card Animations (Hover and Return) ---
-            else { 
+            }
+            // --- Non-Immersive Card Animations (Physics, Hover, and Return) ---
+            else {
+                // --- Card Physics Simulation ---
+                const physics = mesh.userData.physics;
+                let targetQuaternion = mesh.userData.originalQuaternion;
+                if (physics) {
+                    const stiffness = 0.02; // Lowered for more bendiness
+                    const damping = 0.08;   // Lowered for more oscillation
+                    const intensity = 4.0;  // Increased for more reaction
+
+                    const targetAngle = -this.rotationSpeed * intensity;
+                    const springForce = (targetAngle - physics.angle) * stiffness;
+                    const dampingForce = -physics.velocity * damping;
+                    const acceleration = springForce + dampingForce;
+                    physics.velocity += acceleration;
+                    physics.angle += physics.velocity;
+                    physics.angle = MathUtils.clamp(physics.angle, -0.8, 0.8); // Increased range
+
+                    const physicsRotation = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), physics.angle);
+                    targetQuaternion = mesh.userData.originalQuaternion.clone().multiply(physicsRotation);
+                }
+                mesh.quaternion.slerp(targetQuaternion, this.animationSpeed * 2.0);
+
+                // --- Hover position animation ---
                 let targetPosition = mesh.userData.originalPosition;
-                // Hover animation: Move card slightly forward
-                if(this.hoveredMesh === mesh) {
+                if (this.hoveredMesh === mesh) {
                     targetPosition = mesh.userData.originalPosition.clone().multiplyScalar(1.08);
                 }
 
                 if (mesh.userData.originalPosition && !mesh.position.equals(targetPosition)) {
                     mesh.position.lerp(targetPosition, this.animationSpeed);
                 }
-                if (mesh.userData.originalQuaternion && !mesh.quaternion.equals(mesh.userData.originalQuaternion)) {
-                    mesh.quaternion.slerp(mesh.userData.originalQuaternion, this.animationSpeed);
-                }
             }
 
             // --- Opacity Fading Animation ---
             const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
             materials.forEach(mat => {
-                const targetOpacity = mesh.userData.isFadingOut ? 0.2 : 1.0;
+                const targetOpacity = mesh.userData.isFadingOut ? 0.4 : 1.0;
                 if (Math.abs(mat.opacity - targetOpacity) > 0.01) {
-                    mat.opacity = THREE.MathUtils.lerp(mat.opacity, targetOpacity, this.animationSpeed);
+                    mat.opacity = MathUtils.lerp(mat.opacity, targetOpacity, this.animationSpeed);
                 } else {
                     mat.opacity = targetOpacity;
                 }
