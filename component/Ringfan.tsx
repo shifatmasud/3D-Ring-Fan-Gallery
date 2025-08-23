@@ -21,27 +21,46 @@ type Item = {
     openInNewTab?: boolean
 }
 
-type Ringfan = {
+type LayoutProps = { wheelRadius?: number; cardWidth?: number; cardHeight?: number; }
+type TransformProps = { scale?: number; positionX?: number; positionY?: number; positionZ?: number; rotationX?: number; rotationY?: number; rotationZ?: number; }
+type AppearanceProps = { backgroundColor?: string; borderRadius?: number; imageFit?: "cover" | "fit" | "fill"; }
+type InteractionProps = { enableScroll?: boolean; dragSensitivity?: number; flickSensitivity?: number; clickSpeed?: number; enableHover?: boolean; hoverScale?: number; }
+type AnimationProps = { autoRotate?: boolean; autoRotateDirection?: "left" | "right"; autoRotateSpeed?: number; bendingIntensity?: number; bendingRange?: number; }
+
+type RingfanProps = {
     items: Item[]
-    wheelRadius?: number
-    cardWidth?: number
-    cardHeight?: number
-    borderRadius?: number
-    backgroundColor?: string
-    tiltAngle?: number
+    layout?: LayoutProps
+    transform?: TransformProps
+    appearance?: AppearanceProps
+    interaction?: InteractionProps
+    animation?: AnimationProps
 }
 
+// --- Default Props ---
+const defaultLayout = { wheelRadius: 3.5, cardWidth: 1.2, cardHeight: 1.8 };
+const defaultTransform = { scale: 1, positionX: 0, positionY: 0, positionZ: 0, rotationX: 10, rotationY: 0, rotationZ: 0 };
+const defaultAppearance = { backgroundColor: "#ffffff", borderRadius: 0.05, imageFit: "cover" as const };
+const defaultInteraction = { enableScroll: true, dragSensitivity: 1.5, flickSensitivity: 1.0, clickSpeed: 0.06, enableHover: true, hoverScale: 1.08 };
+const defaultAnimation = { autoRotate: false, autoRotateDirection: "right" as const, autoRotateSpeed: 5, bendingIntensity: 4.0, bendingRange: 0.8 };
+
+
 // --- Main Ringfan Component ---
-export default function Ringfan(props: Ringfan) {
+export default function Ringfan(props: RingfanProps) {
     const {
         items = [],
-        wheelRadius = 3.5,
-        cardWidth = 1.2,
-        cardHeight = 1.8,
-        borderRadius = 0.05,
-        backgroundColor = "#ffffff",
-        tiltAngle = 0.17,
+        layout: layoutProps = {},
+        transform: transformProps = {},
+        appearance: appearanceProps = {},
+        interaction: interactionProps = {},
+        animation: animationProps = {},
     } = props
+
+    // Merge provided props with defaults for a complete configuration
+    const layout = { ...defaultLayout, ...layoutProps };
+    const transform = { ...defaultTransform, ...transformProps };
+    const appearance = { ...defaultAppearance, ...appearanceProps };
+    const interaction = { ...defaultInteraction, ...interactionProps };
+    const animation = { ...defaultAnimation, ...animationProps };
 
     const containerRef = React.useRef<HTMLDivElement>(null)
 
@@ -50,12 +69,11 @@ export default function Ringfan(props: Ringfan) {
 
         const scene = new WheelScene(containerRef.current, {
             items,
-            wheelRadius,
-            cardWidth,
-            cardHeight,
-            borderRadius,
-            backgroundColor,
-            tiltAngle,
+            ...layout,
+            ...appearance,
+            transform,
+            interaction,
+            animation,
         })
 
         // Cleanup function to be called on unmount or when dependencies change
@@ -63,14 +81,12 @@ export default function Ringfan(props: Ringfan) {
             scene.destroy()
         }
     }, [
-        // Re-run the effect if these properties change, creating a new scene
         items,
-        wheelRadius,
-        cardWidth,
-        cardHeight,
-        borderRadius,
-        backgroundColor,
-        tiltAngle,
+        layout,
+        transform,
+        appearance,
+        interaction,
+        animation,
     ])
 
     return (
@@ -94,10 +110,79 @@ addPropertyControls(Ringfan, {
             },
         },
     },
-    wheelRadius: { type: ControlType.Number, title: "Wheel Radius", defaultValue: 3.5, min: 0, max: 20, step: 0.1 },
-    cardWidth: { type: ControlType.Number, title: "Card Width", defaultValue: 1.2, min: 0.1, max: 10, step: 0.1 },
-    cardHeight: { type: ControlType.Number, title: "Card Height", defaultValue: 1.8, min: 0.1, max: 10, step: 0.1 },
-    borderRadius: { type: ControlType.Number, title: "Card Radius", defaultValue: 0.05, min: 0, max: 0.5, step: 0.01 },
-    backgroundColor: { type: ControlType.Color, title: "Background", defaultValue: "#ffffff" },
-    tiltAngle: { type: ControlType.Number, title: "Tilt Angle", defaultValue: 0.17, min: -0.5, max: 0.5, step: 0.05 },
+    layout: {
+        type: ControlType.Object,
+        title: "Layout",
+        controls: {
+            wheelRadius: { type: ControlType.Number, title: "Wheel Radius", defaultValue: 3.5, min: 0, max: 20, step: 0.1 },
+            cardWidth: { type: ControlType.Number, title: "Card Width", defaultValue: 1.2, min: 0.1, max: 10, step: 0.1 },
+            cardHeight: { type: ControlType.Number, title: "Card Height", defaultValue: 1.8, min: 0.1, max: 10, step: 0.1 },
+        },
+    },
+    transform: {
+        type: ControlType.Object,
+        title: "Transform",
+        controls: {
+            scale: { type: ControlType.Number, title: "Scale", defaultValue: 1, min: 0.1, max: 5, step: 0.05 },
+            positionX: { type: ControlType.Number, title: "Position X", defaultValue: 0, min: -10, max: 10, step: 0.1 },
+            positionY: { type: ControlType.Number, title: "Position Y", defaultValue: 0, min: -10, max: 10, step: 0.1 },
+            positionZ: { type: ControlType.Number, title: "Position Z", defaultValue: 0, min: -10, max: 10, step: 0.1 },
+            rotationX: { type: ControlType.Number, title: "Rotation X (Tilt)", defaultValue: 10, min: -90, max: 90, step: 1 },
+            rotationY: { type: ControlType.Number, title: "Rotation Y", defaultValue: 0, min: -180, max: 180, step: 1 },
+            rotationZ: { type: ControlType.Number, title: "Rotation Z", defaultValue: 0, min: -90, max: 90, step: 1 },
+        },
+    },
+    appearance: {
+        type: ControlType.Object,
+        title: "Appearance",
+        controls: {
+            backgroundColor: { type: ControlType.Color, title: "Background", defaultValue: "#ffffff" },
+            borderRadius: { type: ControlType.Number, title: "Card Radius", defaultValue: 0.05, min: 0, max: 0.5, step: 0.01 },
+            imageFit: { 
+                type: ControlType.Enum, 
+                title: "Image Fit", 
+                options: ["cover", "fit", "fill"],
+                optionTitles: ["Cover", "Fit", "Fill"],
+                defaultValue: "cover" 
+            },
+        }
+    },
+    interaction: {
+        type: ControlType.Object,
+        title: "Interaction",
+        controls: {
+            enableScroll: { type: ControlType.Boolean, title: "Enable Scroll", defaultValue: true },
+            dragSensitivity: { type: ControlType.Number, title: "Drag Sensitivity", defaultValue: 1.5, min: 0, max: 10, step: 0.1 },
+            flickSensitivity: { type: ControlType.Number, title: "Flick Sensitivity", defaultValue: 1.0, min: 0, max: 5, step: 0.1 },
+            clickSpeed: { type: ControlType.Number, title: "Click Speed", defaultValue: 0.06, min: 0.01, max: 0.2, step: 0.01 },
+            enableHover: { type: ControlType.Boolean, title: "Enable Hover", defaultValue: true },
+            hoverScale: { type: ControlType.Number, title: "Hover Scale", defaultValue: 1.08, min: 1, max: 2, step: 0.01, hidden: (props) => !props.interaction?.enableHover },
+        }
+    },
+    animation: {
+        type: ControlType.Object,
+        title: "Animation",
+        controls: {
+            autoRotate: { type: ControlType.Boolean, title: "Auto Rotate", defaultValue: false },
+            autoRotateDirection: {
+                type: ControlType.Enum,
+                title: "Direction",
+                options: ["right", "left"],
+                optionTitles: ["Right", "Left"],
+                defaultValue: "right",
+                hidden: (props) => !props.animation?.autoRotate,
+            },
+            autoRotateSpeed: {
+                type: ControlType.Number,
+                title: "Speed (deg/s)",
+                defaultValue: 5,
+                min: 0,
+                max: 90,
+                step: 1,
+                hidden: (props) => !props.animation?.autoRotate,
+            },
+            bendingIntensity: { type: ControlType.Number, title: "Bending Intensity", defaultValue: 4, min: 0, max: 20, step: 0.5 },
+            bendingRange: { type: ControlType.Number, title: "Bending Range", defaultValue: 0.8, min: 0, max: 2, step: 0.1 },
+        }
+    }
 })

@@ -6,6 +6,7 @@
 import {
     ACESFilmicToneMapping,
     AmbientLight,
+    CanvasTexture,
     Clock,
     Color,
     DirectionalLight,
@@ -41,11 +42,13 @@ type WheelSceneProps = {
     items: Item[];
     wheelRadius: number;
     cardWidth: number;
-
     cardHeight: number;
     borderRadius: number;
     backgroundColor: string;
-    tiltAngle: number;
+    imageFit: "cover" | "fit" | "fill";
+    transform: { scale: number; positionX: number; positionY: number; positionZ: number; rotationX: number; rotationY: number; rotationZ: number; }
+    interaction: { enableScroll: boolean; dragSensitivity: number; flickSensitivity: number; clickSpeed: number; enableHover: boolean; hoverScale: number; }
+    animation: { autoRotate: boolean; autoRotateDirection: "left" | "right"; autoRotateSpeed: number; bendingIntensity: number; bendingRange: number; }
 };
 
 
@@ -92,10 +95,10 @@ export class WheelScene {
     lastRotation = 0;
     friction = 0.90; // Damping factor for inertia. Lower value = more friction/stops faster.
     clickThreshold = 10; // Max pixels moved to be considered a click
-    dragSensitivity = 0.015; // Controls how much the wheel rotates per pixel dragged.
-    flickSensitivity = 0.01; // Multiplier for the flick gesture.
+    dragSensitivity: number;
+    flickSensitivity: number;
     scrollSensitivity = 0.0009;
-    idleRotationSpeed = 0; // A very slow constant rotation when idle.
+    idleRotationSpeed: number; // A very slow constant rotation when idle.
 
     // --- Pinch-to-Zoom State ---
     activePointers: PointerEvent[] = [];
@@ -107,7 +110,7 @@ export class WheelScene {
     // --- Hover & Immersive State ---
     hoveredMesh: Mesh | null = null;
     immersiveMesh: Mesh | null = null;
-    animationSpeed = 0.06; // Speed for lerp animations (hover, focus). Lower is slower.
+    animationSpeed: number;
 
     constructor(container: HTMLDivElement, props: WheelSceneProps) {
         this.container = container;
@@ -121,6 +124,19 @@ export class WheelScene {
         // --- Core Components ---
         this.clock = new Clock();
         this.raycaster = new Raycaster();
+
+        // --- Init interaction props ---
+        this.dragSensitivity = this.props.interaction.dragSensitivity / 100;
+        this.flickSensitivity = this.props.interaction.flickSensitivity / 100;
+        this.animationSpeed = this.props.interaction.clickSpeed;
+
+        if (this.props.animation.autoRotate) {
+            const direction = this.props.animation.autoRotateDirection === 'left' ? -1 : 1;
+            // Convert deg/sec to rad/sec
+            this.idleRotationSpeed = (this.props.animation.autoRotateSpeed * Math.PI / 180) * direction;
+        } else {
+            this.idleRotationSpeed = 0;
+        }
 
         // --- Renderer, Scene, Camera Setup ---
         this.renderer = new WebGLRenderer({ antialias: true, alpha: true });
@@ -143,7 +159,6 @@ export class WheelScene {
         this.camera.lookAt(0, 0, 0);
 
         // --- Lighting ---
-        // Bright, clean lighting for a white background
         this.scene.add(new AmbientLight(0xffffff, 1.2));
         const mainLight = new DirectionalLight(0xffffff, 1.5);
         mainLight.position.set(0, 10, 10);
@@ -152,7 +167,14 @@ export class WheelScene {
         // --- Card Group ---
         this.group = new Group();
         this.group.rotation.order = "YXZ";
-        this.group.rotation.x = this.props.tiltAngle;
+        const { transform } = this.props;
+        this.group.scale.set(transform.scale, transform.scale, transform.scale);
+        this.group.position.set(transform.positionX, transform.positionY, transform.positionZ);
+        this.group.rotation.set(
+            MathUtils.degToRad(transform.rotationX),
+            MathUtils.degToRad(transform.rotationY),
+            MathUtils.degToRad(transform.rotationZ)
+        );
         this.scene.add(this.group);
 
         this.createCards();
@@ -162,8 +184,31 @@ export class WheelScene {
     }
 
     createCards() {
-        const { items, cardWidth, cardHeight, borderRadius, wheelRadius, tiltAngle } = this.props;
+        const { items, cardWidth, cardHeight, borderRadius, wheelRadius, transform } = this.props;
         const textureLoader = new TextureLoader();
+
+        // --- Create a cinematic light sweep texture for the hover effect ---
+        const shimmerCanvas = document.createElement('canvas');
+        const canvasSize = 128;
+        shimmerCanvas.width = canvasSize;
+        shimmerCanvas.height = canvasSize;
+        const shimmerContext = shimmerCanvas.getContext('2d');
+        if (shimmerContext) {
+            // Create a diagonal gradient for the light sweep
+            const gradient = shimmerContext.createLinearGradient(0, 0, canvasSize, canvasSize);
+            const color = 'rgba(255, 255, 240, 1.0)'; // A bright, warm white
+
+            // Define a sharp, narrow band of light in the gradient
+            gradient.addColorStop(0,    'rgba(255, 255, 240, 0.0)');
+            gradient.addColorStop(0.47, 'rgba(255, 255, 240, 0.0)');
+            gradient.addColorStop(0.5,  color);
+            gradient.addColorStop(0.53, 'rgba(255, 255, 240, 0.0)');
+            gradient.addColorStop(1,    'rgba(255, 255, 240, 0.0)');
+
+            shimmerContext.fillStyle = gradient;
+            shimmerContext.fillRect(0, 0, canvasSize, canvasSize);
+        }
+        const shimmerTexture = new CanvasTexture(shimmerCanvas);
 
         const cardBaseMaterial = new MeshPhysicalMaterial({
             color: new Color("#ffffff"),
@@ -171,34 +216,58 @@ export class WheelScene {
             metalness: 0.0,
             clearcoat: 0.1,
             clearcoatRoughness: 0.3,
-            transparent: true, // Required for opacity animation
+            transparent: true,
         });
 
         items.forEach((item, i) => {
-            const frontMaterial = cardBaseMaterial.clone();
+            const frontMaterial = cardBaseMaterial.clone() as MeshPhysicalMaterial;
+
+            // Add shimmer properties for hover effect
+            frontMaterial.emissive = new Color(0xFFFFEE); // A warm white for a cinematic glow
+            frontMaterial.emissiveMap = shimmerTexture;
+            frontMaterial.emissiveIntensity = 0; // Start with no shimmer
+            frontMaterial.userData.shimmerActive = false;
+            frontMaterial.userData.shimmerTime = 0;
 
             textureLoader.load(item.image, (texture) => {
-                // This approach avoids stretching by adjusting the texture's scale (repeat)
-                // and position (offset) to cover the card area, cropping the image as needed.
+                texture.wrapS = ClampToEdgeWrapping;
+                texture.wrapT = ClampToEdgeWrapping;
+
                 const cardAspect = cardWidth / cardHeight;
                 const imageAspect = texture.image.width / texture.image.height;
 
-                if (imageAspect > cardAspect) {
-                    // Image is wider than card, so scale texture to fit height and crop width
-                    texture.repeat.x = cardAspect / imageAspect;
-                    texture.offset.x = (1 - texture.repeat.x) / 2;
-                } else {
-                    // Image is taller than card, so scale texture to fit width and crop height
-                    texture.repeat.y = imageAspect / cardAspect;
-                    texture.offset.y = (1 - texture.repeat.y) / 2;
-                }
+                texture.repeat.set(1, 1);
+                texture.offset.set(0, 0);
 
+                switch (this.props.imageFit) {
+                    case 'fill':
+                        // Stretch to fill, default behavior
+                        break;
+                    case 'fit':
+                        if (imageAspect > cardAspect) { // Image wider than card, fit to width, letterbox
+                            texture.repeat.y = imageAspect / cardAspect;
+                            texture.offset.y = (1 - texture.repeat.y) / 2;
+                        } else { // Image taller than card, fit to height, pillarbox
+                            texture.repeat.x = cardAspect / imageAspect;
+                            texture.offset.x = (1 - texture.repeat.x) / 2;
+                        }
+                        break;
+                    case 'cover':
+                    default:
+                        if (imageAspect > cardAspect) { // Image wider, fit to height, crop width
+                            texture.repeat.x = cardAspect / imageAspect;
+                            texture.offset.x = (1 - texture.repeat.x) / 2;
+                        } else { // Image taller, fit to width, crop height
+                            texture.repeat.y = imageAspect / cardAspect;
+                            texture.offset.y = (1 - texture.repeat.y) / 2;
+                        }
+                        break;
+                }
+                
                 texture.minFilter = LinearFilter;
                 texture.magFilter = LinearFilter;
                 texture.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
                 texture.colorSpace = SRGBColorSpace;
-                texture.wrapS = ClampToEdgeWrapping;
-                texture.wrapT = ClampToEdgeWrapping;
                 
                 frontMaterial.map = texture;
                 frontMaterial.needsUpdate = true;
@@ -216,8 +285,8 @@ export class WheelScene {
             const position = new Vector3(Math.sin(angle) * wheelRadius, 0, Math.cos(angle) * wheelRadius);
             mesh.position.copy(position);
 
-            // Store original state for animations
-            const euler = new Euler(tiltAngle, angle + Math.PI / 2, 0, "YXZ");
+            const tiltInRad = MathUtils.degToRad(transform.rotationX);
+            const euler = new Euler(tiltInRad, angle + Math.PI / 2, 0, "YXZ");
             mesh.userData = {
                 item,
                 originalPosition: position.clone(),
@@ -240,7 +309,9 @@ export class WheelScene {
         this.container.addEventListener("pointerup", this.onPointerUp);
         this.container.addEventListener("pointerleave", this.onPointerUp);
         this.container.addEventListener("pointercancel", this.onPointerCancel);
-        this.container.addEventListener("wheel", this.onWheel, { passive: false });
+        if (this.props.interaction.enableScroll) {
+            this.container.addEventListener("wheel", this.onWheel, { passive: false });
+        }
         window.addEventListener("resize", this.onResize);
     }
 
@@ -251,7 +322,9 @@ export class WheelScene {
         this.container.removeEventListener("pointerup", this.onPointerUp);
         this.container.removeEventListener("pointerleave", this.onPointerUp);
         this.container.removeEventListener("pointercancel", this.onPointerCancel);
-        this.container.removeEventListener("wheel", this.onWheel);
+        if (this.props.interaction.enableScroll) {
+            this.container.removeEventListener("wheel", this.onWheel);
+        }
         window.removeEventListener("resize", this.onResize);
         if (this.renderer.domElement.parentNode) {
             this.renderer.domElement.parentNode.removeChild(this.renderer.domElement);
@@ -283,19 +356,17 @@ export class WheelScene {
     onPointerDown = (e: PointerEvent) => {
         if (!e.isPrimary) return;
 
-        // Always record the start position for click-vs-drag detection.
         this.dragStart.x = e.clientX;
         this.dragStart.y = e.clientY;
 
         if (this.immersiveMesh) {
-            // In immersive mode, we only care about clicks, not drags.
             return;
         }
 
         this.isDragging = true;
         this.lastPointerX = e.clientX;
         this.pointerVelocity = 0;
-        this.rotationSpeed = 0; // Stop any coasting on new drag
+        this.rotationSpeed = 0;
         this.container.style.cursor = "grabbing";
     };
 
@@ -329,7 +400,6 @@ export class WheelScene {
         const dragDistance = Math.hypot(e.clientX - this.dragStart.x, e.clientY - this.dragStart.y);
 
         if (dragDistance < this.clickThreshold) {
-            // It's a click
             if (this.immersiveMesh) {
                 const pointer = new Vector2();
                 pointer.x = (e.clientX / this.container.clientWidth) * 2 - 1;
@@ -337,20 +407,19 @@ export class WheelScene {
                 this.raycaster.setFromCamera(pointer, this.camera);
                 const intersects = this.raycaster.intersectObject(this.immersiveMesh);
 
-                if (intersects.length > 0) { // Clicked on the focused card
+                if (intersects.length > 0) {
                     const { link, openInNewTab } = this.immersiveMesh.userData.item;
                     if (link && link !== "#") {
                         window.open(link, openInNewTab ? "_blank" : "_self");
                     }
                     this.exitImmersive();
-                } else { // Clicked on the background
+                } else {
                     this.exitImmersive();
                 }
             } else if (this.hoveredMesh) {
                 this.enterImmersive(this.hoveredMesh);
             }
         } else if (this.isDragging) {
-            // It's a flick
             this.rotationSpeed = this.pointerVelocity * this.flickSensitivity;
         }
 
@@ -370,22 +439,22 @@ export class WheelScene {
 
     onWheel = (e: WheelEvent) => {
         e.preventDefault();
-        if (this.immersiveMesh) return; // Disable wheel interactions in immersive mode
+        if (this.immersiveMesh) return;
 
-        if (e.ctrlKey) { // For trackpad pinch-to-zoom and ctrl+scroll zoom
+        if (e.ctrlKey) {
             const zoomAmount = e.deltaY * 0.025;
             this.camera.position.z = MathUtils.clamp(
                 this.camera.position.z + zoomAmount,
                 this.minZoom,
                 this.maxZoom
             );
-        } else { // For regular mouse wheel scrolling
+        } else {
             this.rotationSpeed += e.deltaY * this.scrollSensitivity;
         }
     };
 
     updateHover = (e: PointerEvent) => {
-        if (this.immersiveMesh || this.isDragging) {
+        if (this.immersiveMesh || this.isDragging || !this.props.interaction.enableHover) {
             if (this.hoveredMesh) this.clearHover();
             return;
         };
@@ -441,20 +510,18 @@ export class WheelScene {
 
     animate = () => {
         this.animationFrameId = requestAnimationFrame(this.animate);
+        const delta = this.clock.getDelta();
 
         // --- Wheel Rotation Physics ---
         if (!this.isDragging && !this.immersiveMesh) {
-            // Apply friction if there's significant speed from a flick
             if (Math.abs(this.rotationSpeed) > 0.0001) {
                 this.group.rotation.y += this.rotationSpeed;
                 this.rotationSpeed *= this.friction;
             } else {
-                // If speed is negligible, stop it and apply idle rotation
                 this.rotationSpeed = 0;
-                this.group.rotation.y += this.idleRotationSpeed;
+                this.group.rotation.y += this.idleRotationSpeed * delta;
             }
         }
-        // When dragging, rotation is handled directly in onPointerMove
 
         // --- Per-Card Animation & Physics ---
         this.group.children.forEach(child => {
@@ -462,7 +529,6 @@ export class WheelScene {
 
             // --- Immersive Card Animation ---
             if (this.immersiveMesh === mesh) {
-                // Reset physics state so it doesn't jump when exiting immersive mode
                 if (mesh.userData.physics) {
                     mesh.userData.physics.angle = 0;
                     mesh.userData.physics.velocity = 0;
@@ -480,17 +546,17 @@ export class WheelScene {
                 const physics = mesh.userData.physics;
                 let targetQuaternion = mesh.userData.originalQuaternion;
                 if (physics) {
-                    const stiffness = 0.02; // Lowered for more bendiness
-                    const damping = 0.08;   // Lowered for more oscillation
-                    const intensity = 4.0;  // Increased for more reaction
+                    const stiffness = 0.02; 
+                    const damping = 0.08;
+                    const { bendingIntensity, bendingRange } = this.props.animation;
 
-                    const targetAngle = -this.rotationSpeed * intensity;
+                    const targetAngle = -this.rotationSpeed * bendingIntensity;
                     const springForce = (targetAngle - physics.angle) * stiffness;
                     const dampingForce = -physics.velocity * damping;
                     const acceleration = springForce + dampingForce;
                     physics.velocity += acceleration;
                     physics.angle += physics.velocity;
-                    physics.angle = MathUtils.clamp(physics.angle, -0.8, 0.8); // Increased range
+                    physics.angle = MathUtils.clamp(physics.angle, -bendingRange, bendingRange);
 
                     const physicsRotation = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), physics.angle);
                     targetQuaternion = mesh.userData.originalQuaternion.clone().multiply(physicsRotation);
@@ -499,12 +565,49 @@ export class WheelScene {
 
                 // --- Hover position animation ---
                 let targetPosition = mesh.userData.originalPosition;
-                if (this.hoveredMesh === mesh) {
-                    targetPosition = mesh.userData.originalPosition.clone().multiplyScalar(1.08);
+                if (this.props.interaction.enableHover && this.hoveredMesh === mesh) {
+                    targetPosition = mesh.userData.originalPosition.clone().multiplyScalar(this.props.interaction.hoverScale);
                 }
 
                 if (mesh.userData.originalPosition && !mesh.position.equals(targetPosition)) {
                     mesh.position.lerp(targetPosition, this.animationSpeed);
+                }
+            }
+
+            // --- Hover Shimmer Animation ---
+            const frontMaterial = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as MeshPhysicalMaterial;
+            if (this.props.interaction.enableHover && this.hoveredMesh === mesh) {
+                if (!frontMaterial.userData.shimmerActive) {
+                    frontMaterial.userData.shimmerActive = true;
+                    // Start from a random point to desynchronize shimmers
+                    frontMaterial.userData.shimmerTime = Math.random() * 2.0;
+                }
+
+                frontMaterial.userData.shimmerTime += delta * 1.0; // Control shimmer speed
+                const shimmerLoopDuration = 2.0;
+                const shimmerProgress = (frontMaterial.userData.shimmerTime % shimmerLoopDuration) / shimmerLoopDuration;
+                
+                // Add easing for a more cinematic feel
+                const easeInOutCubic = (t: number) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+                const easedProgress = easeInOutCubic(shimmerProgress);
+
+                // Fade in intensity for a bright flash
+                frontMaterial.emissiveIntensity = Math.min(frontMaterial.emissiveIntensity + delta * 4.0, 1.5);
+
+                // Move the shimmer texture across the card
+                if (frontMaterial.emissiveMap) {
+                    // A larger range ensures the diagonal shimmer sweeps fully across
+                    frontMaterial.emissiveMap.offset.x = easedProgress * 3.0 - 1.5;
+                    frontMaterial.emissiveMap.needsUpdate = true;
+                }
+            } else {
+                if (frontMaterial.userData.shimmerActive) {
+                    // Fade out intensity
+                    frontMaterial.emissiveIntensity = Math.max(frontMaterial.emissiveIntensity - delta * 4.0, 0);
+
+                    if (frontMaterial.emissiveIntensity === 0) {
+                        frontMaterial.userData.shimmerActive = false;
+                    }
                 }
             }
 

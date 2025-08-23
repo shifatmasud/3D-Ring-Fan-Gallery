@@ -39,7 +39,11 @@ export function App() {
                 color: "#000000",
             }}
         >
-            <Ringfan items={defaultItems} backgroundColor="#ffffff" wheelRadius={4} />
+            <Ringfan 
+                items={defaultItems}
+                appearance={{ backgroundColor: "#ffffff" }}
+                layout={{ wheelRadius: 4 }} 
+            />
         </div>
     )
 }
