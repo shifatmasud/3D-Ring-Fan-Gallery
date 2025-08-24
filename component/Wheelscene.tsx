@@ -5,7 +5,6 @@
 
 import {
     ACESFilmicToneMapping,
-    AmbientLight,
     CanvasTexture,
     Clock,
     Color,
@@ -28,7 +27,11 @@ import {
     WebGLRenderer,
     ClampToEdgeWrapping,
     LinearFilter,
+    HemisphereLight,
 } from "three";
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 
 // --- Type Definitions ---
@@ -38,7 +41,7 @@ type Item = {
     openInNewTab?: boolean;
 };
 
-type WheelSceneProps = {
+export type WheelSceneProps = {
     items: Item[];
     wheelRadius: number;
     cardWidth: number;
@@ -47,9 +50,45 @@ type WheelSceneProps = {
     backgroundColor: string;
     imageFit: "cover" | "fit" | "fill";
     transform: { scale: number; positionX: number; positionY: number; positionZ: number; rotationX: number; rotationY: number; rotationZ: number; }
-    interaction: { enableScroll: boolean; dragSensitivity: number; flickSensitivity: number; clickSpeed: number; enableHover: boolean; hoverScale: number; }
-    animation: { autoRotate: boolean; autoRotateDirection: "left" | "right"; autoRotateSpeed: number; bendingIntensity: number; bendingRange: number; }
+    interaction: { enableScroll: boolean; dragSensitivity: number; flickSensitivity: number; clickSpeed: number; enableHover: boolean; hoverScale: number; hoverOffsetY: number; hoverSlideOut: number; }
+    animation: { autoRotate: boolean; autoRotateDirection: "left" | "right"; autoRotateSpeed: number; bendingIntensity: number; bendingRange: number; bendingConstraint: "center" | "top" | "bottom" | "left" | "right"; }
 };
+
+/**
+ * Parses a CSS color string to extract a THREE.Color and an alpha value.
+ * @param {string} colorStr The CSS color string (e.g., "#FFF", "rgba(255,0,0,0.5)", "transparent").
+ * @returns {{color: Color, alpha: number}} An object with the parsed color and alpha.
+ */
+function parseColorAndAlpha(colorStr: string): { color: Color; alpha: number } {
+    const color = new Color();
+    let alpha = 1;
+
+    if (!colorStr || colorStr === 'transparent') {
+        return { color: new Color(0x000000), alpha: 0 };
+    }
+    
+    try {
+        const rgbaMatch = colorStr.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d\.]+))?\)$/);
+        if (rgbaMatch) {
+            color.setRGB(
+                parseInt(rgbaMatch[1]) / 255,
+                parseInt(rgbaMatch[2]) / 255,
+                parseInt(rgbaMatch[3]) / 255
+            );
+            if (rgbaMatch[4] !== undefined) {
+                alpha = parseFloat(rgbaMatch[4]);
+            }
+        } else {
+            color.set(colorStr);
+        }
+    } catch (e) {
+        console.error("Invalid color string:", colorStr, "Defaulting to transparent.");
+        color.set(0x000000);
+        alpha = 0;
+    }
+
+    return { color, alpha };
+}
 
 
 /**
@@ -83,7 +122,10 @@ export class WheelScene {
     renderer: WebGLRenderer;
     scene: Scene;
     camera: PerspectiveCamera;
-    group: Group;
+    composer: EffectComposer;
+    bloomPass: UnrealBloomPass;
+    baseGroup: Group;
+    spinGroup: Group;
     animationFrameId: number;
 
     // --- Interaction & Physics State ---
@@ -92,7 +134,7 @@ export class WheelScene {
     lastPointerX = 0;
     pointerVelocity = 0;
     rotationSpeed = 0; // Current coasting speed
-    lastRotation = 0;
+    lastFrameRotationY = 0; // For bending calculation
     friction = 0.90; // Damping factor for inertia. Lower value = more friction/stops faster.
     clickThreshold = 10; // Max pixels moved to be considered a click
     dragSensitivity: number;
@@ -108,9 +150,16 @@ export class WheelScene {
     maxZoom = 0;
 
     // --- Hover & Immersive State ---
-    hoveredMesh: Mesh | null = null;
-    immersiveMesh: Mesh | null = null;
+    hoveredGroup: Group | null = null;
+    immersiveGroup: Group | null = null;
     animationSpeed: number;
+
+    // --- Animation targets for smooth transitions ---
+    targetGroupRotation: Euler;
+    targetGroupPosition: Vector3;
+    targetGroupScale: Vector3;
+    targetBackgroundColor: Color;
+    targetRendererClearAlpha: number;
 
     constructor(container: HTMLDivElement, props: WheelSceneProps) {
         this.container = container;
@@ -139,10 +188,11 @@ export class WheelScene {
         }
 
         // --- Renderer, Scene, Camera Setup ---
+        const { color: bgColor, alpha: bgAlpha } = parseColorAndAlpha(this.props.backgroundColor);
         this.renderer = new WebGLRenderer({ antialias: true, alpha: true });
         this.renderer.setPixelRatio(window.devicePixelRatio);
         this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
-        this.renderer.setClearColor(new Color(this.props.backgroundColor), 1);
+        this.renderer.setClearColor(bgColor, bgAlpha);
         this.renderer.outputColorSpace = SRGBColorSpace;
         this.renderer.toneMapping = ACESFilmicToneMapping;
         this.container.appendChild(this.renderer.domElement);
@@ -150,7 +200,7 @@ export class WheelScene {
         this.container.style.touchAction = "none"; // Recommended for pointer events
 
         this.scene = new Scene();
-        this.scene.background = new Color(this.props.backgroundColor);
+        this.scene.background = null; // Use renderer clear color for consistency and transparency
         this.camera = new PerspectiveCamera(55, this.container.clientWidth / this.container.clientHeight, 0.1, 1000);
         const baseZoom = this.props.wheelRadius * 2.8;
         this.minZoom = this.props.wheelRadius * 2.0;
@@ -158,57 +208,107 @@ export class WheelScene {
         this.camera.position.set(0, 0, baseZoom);
         this.camera.lookAt(0, 0, 0);
 
-        // --- Lighting ---
-        this.scene.add(new AmbientLight(0xffffff, 1.2));
-        const mainLight = new DirectionalLight(0xffffff, 1.5);
-        mainLight.position.set(0, 10, 10);
-        this.scene.add(mainLight);
+        // --- Post-processing ---
+        const renderPass = new RenderPass(this.scene, this.camera);
+        this.bloomPass = new UnrealBloomPass(
+            new Vector2(this.container.clientWidth, this.container.clientHeight),
+            0.4, // strength
+            0.1, // radius
+            0.85  // threshold
+        );
+        this.composer = new EffectComposer(this.renderer);
+        this.composer.addPass(renderPass);
+        this.composer.addPass(this.bloomPass);
 
-        // --- Card Group ---
-        this.group = new Group();
-        this.group.rotation.order = "YXZ";
+        // --- Lighting ---
+        this.scene.add(new HemisphereLight(0x8888ff, 0x444400, 1.5));
+        const keyLight = new DirectionalLight(0xffffff, 2.0);
+        keyLight.position.set(5, 10, 5);
+        this.scene.add(keyLight);
+        const fillLight = new DirectionalLight(0xffffff, 1.0);
+        fillLight.position.set(-5, -5, 10);
+        this.scene.add(fillLight);
+
+        // --- Group Setup ---
+        this.baseGroup = new Group();
+        this.baseGroup.rotation.order = "YXZ";
         const { transform } = this.props;
-        this.group.scale.set(transform.scale, transform.scale, transform.scale);
-        this.group.position.set(transform.positionX, transform.positionY, transform.positionZ);
-        this.group.rotation.set(
+        this.baseGroup.scale.set(transform.scale, transform.scale, transform.scale);
+        this.baseGroup.position.set(transform.positionX, transform.positionY, transform.positionZ);
+        this.baseGroup.rotation.set(
             MathUtils.degToRad(transform.rotationX),
             MathUtils.degToRad(transform.rotationY),
             MathUtils.degToRad(transform.rotationZ)
         );
-        this.scene.add(this.group);
+        this.scene.add(this.baseGroup);
+
+        this.spinGroup = new Group();
+        this.baseGroup.add(this.spinGroup);
+        this.lastFrameRotationY = this.spinGroup.rotation.y;
+
+        // --- Animation Targets ---
+        this.targetGroupPosition = this.baseGroup.position.clone();
+        this.targetGroupScale = this.baseGroup.scale.clone();
+        this.targetGroupRotation = this.baseGroup.rotation.clone();
+        this.targetBackgroundColor = bgColor.clone();
+        this.targetRendererClearAlpha = bgAlpha;
 
         this.createCards();
         this.setupEventListeners();
         this.onResize();
         this.animate();
     }
+    
+    update(newProps: WheelSceneProps) {
+        const propsAreEqual = (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b);
+
+        const needsRebuild =
+            !propsAreEqual(this.props.items, newProps.items) ||
+            this.props.wheelRadius !== newProps.wheelRadius ||
+            this.props.cardWidth !== newProps.cardWidth ||
+            this.props.cardHeight !== newProps.cardHeight ||
+            this.props.borderRadius !== newProps.borderRadius ||
+            this.props.imageFit !== newProps.imageFit ||
+            this.props.animation.bendingConstraint !== newProps.animation.bendingConstraint;
+
+        if (needsRebuild) {
+            this.destroy();
+            this.props = newProps;
+            this.init();
+            return;
+        }
+
+        // Update animatable targets
+        const { transform, backgroundColor, interaction, animation } = newProps;
+        this.targetGroupPosition.set(transform.positionX, transform.positionY, transform.positionZ);
+        this.targetGroupScale.set(transform.scale, transform.scale, transform.scale);
+        this.targetGroupRotation.set(
+            MathUtils.degToRad(transform.rotationX),
+            MathUtils.degToRad(transform.rotationY),
+            MathUtils.degToRad(transform.rotationZ)
+        );
+        const { color: newBgColor, alpha: newBgAlpha } = parseColorAndAlpha(backgroundColor);
+        this.targetBackgroundColor.copy(newBgColor);
+        this.targetRendererClearAlpha = newBgAlpha;
+        
+        // Update other properties
+        this.dragSensitivity = interaction.dragSensitivity / 100;
+        this.flickSensitivity = interaction.flickSensitivity / 100;
+        this.animationSpeed = interaction.clickSpeed;
+
+        if (animation.autoRotate) {
+            const direction = animation.autoRotateDirection === 'left' ? -1 : 1;
+            this.idleRotationSpeed = (animation.autoRotateSpeed * Math.PI / 180) * direction;
+        } else {
+            this.idleRotationSpeed = 0;
+        }
+        
+        this.props = newProps;
+    }
 
     createCards() {
-        const { items, cardWidth, cardHeight, borderRadius, wheelRadius, transform } = this.props;
+        const { items, cardWidth, cardHeight, borderRadius, wheelRadius, transform, animation } = this.props;
         const textureLoader = new TextureLoader();
-
-        // --- Create a cinematic light sweep texture for the hover effect ---
-        const shimmerCanvas = document.createElement('canvas');
-        const canvasSize = 128;
-        shimmerCanvas.width = canvasSize;
-        shimmerCanvas.height = canvasSize;
-        const shimmerContext = shimmerCanvas.getContext('2d');
-        if (shimmerContext) {
-            // Create a diagonal gradient for the light sweep
-            const gradient = shimmerContext.createLinearGradient(0, 0, canvasSize, canvasSize);
-            const color = 'rgba(255, 255, 240, 1.0)'; // A bright, warm white
-
-            // Define a sharp, narrow band of light in the gradient
-            gradient.addColorStop(0,    'rgba(255, 255, 240, 0.0)');
-            gradient.addColorStop(0.47, 'rgba(255, 255, 240, 0.0)');
-            gradient.addColorStop(0.5,  color);
-            gradient.addColorStop(0.53, 'rgba(255, 255, 240, 0.0)');
-            gradient.addColorStop(1,    'rgba(255, 255, 240, 0.0)');
-
-            shimmerContext.fillStyle = gradient;
-            shimmerContext.fillRect(0, 0, canvasSize, canvasSize);
-        }
-        const shimmerTexture = new CanvasTexture(shimmerCanvas);
 
         const cardBaseMaterial = new MeshPhysicalMaterial({
             color: new Color("#ffffff"),
@@ -221,85 +321,116 @@ export class WheelScene {
 
         items.forEach((item, i) => {
             const frontMaterial = cardBaseMaterial.clone() as MeshPhysicalMaterial;
-
-            // Add shimmer properties for hover effect
-            frontMaterial.emissive = new Color(0xFFFFEE); // A warm white for a cinematic glow
-            frontMaterial.emissiveMap = shimmerTexture;
-            frontMaterial.emissiveIntensity = 0; // Start with no shimmer
-            frontMaterial.userData.shimmerActive = false;
-            frontMaterial.userData.shimmerTime = 0;
+            
+            // Emissive color acts as a multiplier for the emissive map (the texture).
+            // White means the texture colors will be used for the glow.
+            frontMaterial.emissive = new Color(0xFFFFFF); 
+            frontMaterial.emissiveIntensity = 0; // Start with no glow
 
             textureLoader.load(item.image, (texture) => {
                 texture.wrapS = ClampToEdgeWrapping;
                 texture.wrapT = ClampToEdgeWrapping;
-
                 const cardAspect = cardWidth / cardHeight;
                 const imageAspect = texture.image.width / texture.image.height;
-
                 texture.repeat.set(1, 1);
                 texture.offset.set(0, 0);
-
                 switch (this.props.imageFit) {
-                    case 'fill':
-                        // Stretch to fill, default behavior
-                        break;
+                    case 'fill': break;
                     case 'fit':
-                        if (imageAspect > cardAspect) { // Image wider than card, fit to width, letterbox
+                        if (imageAspect > cardAspect) {
                             texture.repeat.y = imageAspect / cardAspect;
                             texture.offset.y = (1 - texture.repeat.y) / 2;
-                        } else { // Image taller than card, fit to height, pillarbox
+                        } else {
                             texture.repeat.x = cardAspect / imageAspect;
                             texture.offset.x = (1 - texture.repeat.x) / 2;
                         }
                         break;
                     case 'cover':
                     default:
-                        if (imageAspect > cardAspect) { // Image wider, fit to height, crop width
+                        if (imageAspect > cardAspect) {
                             texture.repeat.x = cardAspect / imageAspect;
                             texture.offset.x = (1 - texture.repeat.x) / 2;
-                        } else { // Image taller, fit to width, crop height
+                        } else {
                             texture.repeat.y = imageAspect / cardAspect;
                             texture.offset.y = (1 - texture.repeat.y) / 2;
                         }
                         break;
                 }
-                
                 texture.minFilter = LinearFilter;
                 texture.magFilter = LinearFilter;
                 texture.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
                 texture.colorSpace = SRGBColorSpace;
-                
                 frontMaterial.map = texture;
+                frontMaterial.emissiveMap = texture; // Use the image for the glow color
                 frontMaterial.needsUpdate = true;
             });
 
             const shape = createRoundedRectShape(cardWidth, cardHeight, borderRadius);
-            const geometry = new ExtrudeGeometry(shape, { depth: 0.05, bevelEnabled: false });
+            const extrudeSettings = { depth: 0.05, bevelEnabled: false };
+            const geometry = new ExtrudeGeometry(shape, extrudeSettings);
+
+            // --- Correct UV Mapping for front and back faces ---
+            const uvAttribute = geometry.attributes.uv;
+            const positionAttribute = geometry.attributes.position;
+            for (let i = 0; i < positionAttribute.count; i++) {
+                const z = positionAttribute.getZ(i);
+                const x = positionAttribute.getX(i);
+                const y = positionAttribute.getY(i);
+
+                // Front face (z is at the extruded depth)
+                if (Math.abs(z - extrudeSettings.depth) < 0.0001) {
+                    uvAttribute.setXY(
+                        i,
+                        (x + cardWidth / 2) / cardWidth,
+                        (y + cardHeight / 2) / cardHeight
+                    );
+                } 
+                // Back face (z is at 0)
+                else if (Math.abs(z) < 0.0001) {
+                    uvAttribute.setXY(
+                        i,
+                        1 - ((x + cardWidth / 2) / cardWidth), // Flip U for back
+                        (y + cardHeight / 2) / cardHeight
+                    );
+                }
+            }
+            uvAttribute.needsUpdate = true;
+
 
             const sideMaterial = cardBaseMaterial.clone();
-            (sideMaterial.color as Color).set(0xf0f0f0); // Light grey for the card edges
+            (sideMaterial.color as Color).set(0xf0f0f0);
 
+            // --- Create a group for each card to handle pivot-based bending ---
+            const cardGroup = new Group();
             const mesh = new Mesh(geometry, [frontMaterial, sideMaterial]);
 
+            // Offset the mesh within the group based on the bending constraint
+            const offset = new Vector3();
+            switch (animation.bendingConstraint) {
+                case "top":    offset.y = -cardHeight / 2; break;
+                case "bottom": offset.y = cardHeight / 2; break;
+                case "left":   offset.x = cardWidth / 2; break;
+                case "right":  offset.x = -cardWidth / 2; break;
+            }
+            mesh.position.copy(offset);
+            cardGroup.add(mesh);
+
+            // Position and orient the group in the ring
             const angle = (i / items.length) * Math.PI * 2;
             const position = new Vector3(Math.sin(angle) * wheelRadius, 0, Math.cos(angle) * wheelRadius);
-            mesh.position.copy(position);
+            cardGroup.position.copy(position);
 
             const tiltInRad = MathUtils.degToRad(transform.rotationX);
             const euler = new Euler(tiltInRad, angle + Math.PI / 2, 0, "YXZ");
-            mesh.userData = {
+            cardGroup.userData = {
                 item,
                 originalPosition: position.clone(),
                 originalQuaternion: new Quaternion().setFromEuler(euler),
                 isFadingOut: false,
-                physics: {
-                    angle: 0,
-                    velocity: 0,
-                },
+                physics: { angle: 0, velocity: 0 },
             };
-
-            mesh.quaternion.copy(mesh.userData.originalQuaternion);
-            this.group.add(mesh);
+            cardGroup.quaternion.copy(cardGroup.userData.originalQuaternion);
+            this.spinGroup.add(cardGroup);
         });
     }
 
@@ -330,7 +461,7 @@ export class WheelScene {
             this.renderer.domElement.parentNode.removeChild(this.renderer.domElement);
         }
         this.renderer.dispose();
-        this.group.children.forEach((child) => {
+        this.baseGroup.children.forEach((child) => {
             if (child instanceof Mesh) {
                 child.geometry.dispose();
                 if (Array.isArray(child.material)) {
@@ -348,21 +479,19 @@ export class WheelScene {
 
     onResize = () => {
         if (!this.container) return;
-        this.camera.aspect = this.container.clientWidth / this.container.clientHeight;
+        const width = this.container.clientWidth;
+        const height = this.container.clientHeight;
+        this.camera.aspect = width / height;
         this.camera.updateProjectionMatrix();
-        this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
+        this.renderer.setSize(width, height);
+        this.composer.setSize(width, height);
     };
 
     onPointerDown = (e: PointerEvent) => {
         if (!e.isPrimary) return;
-
         this.dragStart.x = e.clientX;
         this.dragStart.y = e.clientY;
-
-        if (this.immersiveMesh) {
-            return;
-        }
-
+        if (this.immersiveGroup) return;
         this.isDragging = true;
         this.lastPointerX = e.clientX;
         this.pointerVelocity = 0;
@@ -373,12 +502,12 @@ export class WheelScene {
     onPointerMove = (e: PointerEvent) => {
         if (!e.isPrimary) return;
 
-        if (this.immersiveMesh) {
+        if (this.immersiveGroup) {
             const pointer = new Vector2();
             pointer.x = (e.clientX / this.container.clientWidth) * 2 - 1;
             pointer.y = -(e.clientY / this.container.clientHeight) * 2 + 1;
             this.raycaster.setFromCamera(pointer, this.camera);
-            const intersects = this.raycaster.intersectObject(this.immersiveMesh);
+            const intersects = this.raycaster.intersectObject(this.immersiveGroup);
             this.container.style.cursor = intersects.length > 0 ? "pointer" : "default";
             return;
         }
@@ -390,86 +519,68 @@ export class WheelScene {
             const deltaX = currentX - this.lastPointerX;
             this.pointerVelocity = deltaX;
             this.lastPointerX = currentX;
-            this.group.rotation.y += deltaX * this.dragSensitivity;
+            this.spinGroup.rotation.y += deltaX * this.dragSensitivity;
         }
     };
 
     onPointerUp = (e: PointerEvent) => {
         if (!e.isPrimary) return;
-
         const dragDistance = Math.hypot(e.clientX - this.dragStart.x, e.clientY - this.dragStart.y);
 
         if (dragDistance < this.clickThreshold) {
-            if (this.immersiveMesh) {
-                const pointer = new Vector2();
-                pointer.x = (e.clientX / this.container.clientWidth) * 2 - 1;
-                pointer.y = -(e.clientY / this.container.clientHeight) * 2 + 1;
+            if (this.immersiveGroup) {
+                const pointer = new Vector2((e.clientX / this.container.clientWidth) * 2 - 1, -(e.clientY / this.container.clientHeight) * 2 + 1);
                 this.raycaster.setFromCamera(pointer, this.camera);
-                const intersects = this.raycaster.intersectObject(this.immersiveMesh);
-
+                const intersects = this.raycaster.intersectObject(this.immersiveGroup);
                 if (intersects.length > 0) {
-                    const { link, openInNewTab } = this.immersiveMesh.userData.item;
+                    const { link, openInNewTab } = this.immersiveGroup.userData.item;
                     if (link && link !== "#") {
                         window.open(link, openInNewTab ? "_blank" : "_self");
                     }
-                    this.exitImmersive();
-                } else {
-                    this.exitImmersive();
                 }
-            } else if (this.hoveredMesh) {
-                this.enterImmersive(this.hoveredMesh);
+                this.exitImmersive();
+            } else if (this.hoveredGroup) {
+                this.enterImmersive(this.hoveredGroup);
             }
         } else if (this.isDragging) {
             this.rotationSpeed = this.pointerVelocity * this.flickSensitivity;
         }
-
         this.isDragging = false;
-        if (!this.hoveredMesh && !this.immersiveMesh) {
-            this.container.style.cursor = "grab";
-        }
+        if (!this.hoveredGroup && !this.immersiveGroup) this.container.style.cursor = "grab";
     };
 
     onPointerCancel = (e: PointerEvent) => {
         this.isDragging = false;
         this.rotationSpeed = 0;
-        if (!this.hoveredMesh && !this.immersiveMesh) {
-            this.container.style.cursor = "grab";
-        }
+        if (!this.hoveredGroup && !this.immersiveGroup) this.container.style.cursor = "grab";
     };
 
     onWheel = (e: WheelEvent) => {
         e.preventDefault();
-        if (this.immersiveMesh) return;
-
+        if (this.immersiveGroup) return;
         if (e.ctrlKey) {
             const zoomAmount = e.deltaY * 0.025;
-            this.camera.position.z = MathUtils.clamp(
-                this.camera.position.z + zoomAmount,
-                this.minZoom,
-                this.maxZoom
-            );
+            this.camera.position.z = MathUtils.clamp(this.camera.position.z + zoomAmount, this.minZoom, this.maxZoom);
         } else {
             this.rotationSpeed += e.deltaY * this.scrollSensitivity;
         }
     };
 
     updateHover = (e: PointerEvent) => {
-        if (this.immersiveMesh || this.isDragging || !this.props.interaction.enableHover) {
-            if (this.hoveredMesh) this.clearHover();
+        if (this.immersiveGroup || this.isDragging || !this.props.interaction.enableHover) {
+            if (this.hoveredGroup) this.clearHover();
             return;
         };
-
-        const pointer = new Vector2();
-        pointer.x = (e.clientX / this.container.clientWidth) * 2 - 1;
-        pointer.y = -(e.clientY / this.container.clientHeight) * 2 + 1;
+        const pointer = new Vector2((e.clientX / this.container.clientWidth) * 2 - 1, -(e.clientY / this.container.clientHeight) * 2 + 1);
         this.raycaster.setFromCamera(pointer, this.camera);
-        const intersects = this.raycaster.intersectObjects(this.group.children);
-
+        const intersects = this.raycaster.intersectObjects(this.spinGroup.children, true);
         if (intersects.length > 0) {
-            const intersectedMesh = intersects[0].object as Mesh;
-            if (this.hoveredMesh !== intersectedMesh) {
+            const intersect = intersects[0];
+            const intersectedMesh = intersect.object as Mesh;
+            const intersectedGroup = intersectedMesh.parent as Group;
+            if (this.hoveredGroup !== intersectedGroup) {
                 this.clearHover();
-                this.hoveredMesh = intersectedMesh;
+                this.hoveredGroup = intersectedGroup;
                 this.container.style.cursor = "pointer";
             }
         } else {
@@ -478,143 +589,144 @@ export class WheelScene {
     };
 
     clearHover = () => {
-        if (this.hoveredMesh) {
-            this.hoveredMesh = null;
-            if (!this.isDragging && !this.immersiveMesh) {
-                this.container.style.cursor = "grab";
-            }
+        if (this.hoveredGroup) {
+            this.hoveredGroup = null;
+            if (!this.isDragging && !this.immersiveGroup) this.container.style.cursor = "grab";
         }
     };
 
-    enterImmersive = (mesh: Mesh) => {
-        if (this.immersiveMesh) return;
-        this.immersiveMesh = mesh;
+    enterImmersive = (group: Group) => {
+        if (this.immersiveGroup) return;
+        this.immersiveGroup = group;
         this.clearHover();
         this.rotationSpeed = 0;
-
-        this.group.children.forEach(child => {
-            const childMesh = child as Mesh;
-            childMesh.userData.isFadingOut = (childMesh !== this.immersiveMesh);
-        });
+        this.spinGroup.children.forEach(child => { (child as Group).userData.isFadingOut = (child !== this.immersiveGroup); });
     }
 
     exitImmersive = () => {
-        if (!this.immersiveMesh) return;
-        this.immersiveMesh = null;
+        if (!this.immersiveGroup) return;
+        this.immersiveGroup = null;
         this.container.style.cursor = "grab";
-
-        this.group.children.forEach(child => {
-            (child as Mesh).userData.isFadingOut = false;
-        });
+        this.spinGroup.children.forEach(child => { (child as Group).userData.isFadingOut = false; });
     }
 
     animate = () => {
         this.animationFrameId = requestAnimationFrame(this.animate);
         const delta = this.clock.getDelta();
+        const lerpFactor = Math.min(delta * 5, 1);
+
+        // --- Animate Group Transform ---
+        this.baseGroup.position.lerp(this.targetGroupPosition, lerpFactor);
+        this.baseGroup.scale.lerp(this.targetGroupScale, lerpFactor);
+        const targetQuaternion = new Quaternion().setFromEuler(this.targetGroupRotation);
+        this.baseGroup.quaternion.slerp(targetQuaternion, lerpFactor);
+
+        // --- Animate Background Color and Alpha ---
+        const currentClearColor = new Color();
+        this.renderer.getClearColor(currentClearColor);
+        const currentClearAlpha = this.renderer.getClearAlpha();
+        const colorChanged = !currentClearColor.equals(this.targetBackgroundColor);
+        const alphaChanged = Math.abs(currentClearAlpha - this.targetRendererClearAlpha) > 0.01;
+        if (colorChanged || alphaChanged) {
+            const newColor = currentClearColor.lerp(this.targetBackgroundColor, lerpFactor);
+            const newAlpha = MathUtils.lerp(currentClearAlpha, this.targetRendererClearAlpha, lerpFactor);
+            this.renderer.setClearColor(newColor, newAlpha);
+        }
 
         // --- Wheel Rotation Physics ---
-        if (!this.isDragging && !this.immersiveMesh) {
+        if (!this.isDragging && !this.immersiveGroup) {
             if (Math.abs(this.rotationSpeed) > 0.0001) {
-                this.group.rotation.y += this.rotationSpeed;
+                this.spinGroup.rotation.y += this.rotationSpeed;
                 this.rotationSpeed *= this.friction;
             } else {
                 this.rotationSpeed = 0;
-                this.group.rotation.y += this.idleRotationSpeed * delta;
+                this.spinGroup.rotation.y += this.idleRotationSpeed * delta;
             }
         }
 
-        // --- Per-Card Animation & Physics ---
-        this.group.children.forEach(child => {
-            const mesh = child as Mesh;
+        const rotationDelta = this.spinGroup.rotation.y - this.lastFrameRotationY;
 
-            // --- Immersive Card Animation ---
-            if (this.immersiveMesh === mesh) {
-                if (mesh.userData.physics) {
-                    mesh.userData.physics.angle = 0;
-                    mesh.userData.physics.velocity = 0;
+        // --- Per-Card Animation & Physics ---
+        this.spinGroup.children.forEach(child => {
+            const cardGroup = child as Group;
+            const mesh = cardGroup.children[0] as Mesh;
+            const frontMaterial = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as MeshPhysicalMaterial;
+            
+            if (this.immersiveGroup === cardGroup) {
+                if (cardGroup.userData.physics) {
+                    cardGroup.userData.physics.angle = 0;
+                    cardGroup.userData.physics.velocity = 0;
                 }
                 const targetWorldPosition = new Vector3(0, 0, this.camera.position.z - this.props.cardWidth * 1.5);
-                const targetLocalPosition = this.group.worldToLocal(targetWorldPosition.clone());
-                mesh.position.lerp(targetLocalPosition, this.animationSpeed);
+                const targetLocalPosition = this.spinGroup.worldToLocal(targetWorldPosition.clone());
+                cardGroup.position.lerp(targetLocalPosition, this.animationSpeed);
 
-                const targetLocalQuaternion = this.group.quaternion.clone().invert();
-                mesh.quaternion.slerp(targetLocalQuaternion, this.animationSpeed);
-            }
-            // --- Non-Immersive Card Animations (Physics, Hover, and Return) ---
-            else {
-                // --- Card Physics Simulation ---
-                const physics = mesh.userData.physics;
-                let targetQuaternion = mesh.userData.originalQuaternion;
+                const worldQuaternion = new Quaternion();
+                this.spinGroup.getWorldQuaternion(worldQuaternion);
+                const targetLocalQuaternion = worldQuaternion.invert();
+                cardGroup.quaternion.slerp(targetLocalQuaternion, this.animationSpeed);
+
+            } else {
+                const physics = cardGroup.userData.physics;
+                let targetQuaternion = cardGroup.userData.originalQuaternion.clone();
                 if (physics) {
-                    const stiffness = 0.02; 
-                    const damping = 0.08;
-                    const { bendingIntensity, bendingRange } = this.props.animation;
-
-                    const targetAngle = -this.rotationSpeed * bendingIntensity;
+                    // Increased stiffness for more responsive bending during drag
+                    const stiffness = 0.1;
+                    const damping = 0.2;
+                    const { bendingIntensity, bendingRange, bendingConstraint } = this.props.animation;
+                    const targetAngle = -rotationDelta * bendingIntensity;
                     const springForce = (targetAngle - physics.angle) * stiffness;
                     const dampingForce = -physics.velocity * damping;
-                    const acceleration = springForce + dampingForce;
-                    physics.velocity += acceleration;
+                    physics.velocity += springForce + dampingForce;
                     physics.angle += physics.velocity;
                     physics.angle = MathUtils.clamp(physics.angle, -bendingRange, bendingRange);
 
-                    const physicsRotation = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), physics.angle);
-                    targetQuaternion = mesh.userData.originalQuaternion.clone().multiply(physicsRotation);
-                }
-                mesh.quaternion.slerp(targetQuaternion, this.animationSpeed * 2.0);
-
-                // --- Hover position animation ---
-                let targetPosition = mesh.userData.originalPosition;
-                if (this.props.interaction.enableHover && this.hoveredMesh === mesh) {
-                    targetPosition = mesh.userData.originalPosition.clone().multiplyScalar(this.props.interaction.hoverScale);
+                    const physicsRotation = new Quaternion();
+                    const isSideBend = bendingConstraint === 'left' || bendingConstraint === 'right';
+                    const bendAxis = isSideBend ? new Vector3(0, 1, 0) : new Vector3(1, 0, 0);
+                    physicsRotation.setFromAxisAngle(bendAxis, physics.angle);
+                    targetQuaternion.multiply(physicsRotation);
                 }
 
-                if (mesh.userData.originalPosition && !mesh.position.equals(targetPosition)) {
-                    mesh.position.lerp(targetPosition, this.animationSpeed);
+                // Elegance: Add a gentle tilt on hover
+                if (this.props.interaction.enableHover && this.hoveredGroup === cardGroup) {
+                    const tiltQuaternion = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), MathUtils.degToRad(-5));
+                    targetQuaternion.multiply(tiltQuaternion);
+                }
+
+                cardGroup.quaternion.slerp(targetQuaternion, this.animationSpeed * 2.0);
+
+                let targetPosition = cardGroup.userData.originalPosition;
+                if (this.props.interaction.enableHover && this.hoveredGroup === cardGroup) {
+                    targetPosition = cardGroup.userData.originalPosition.clone().multiplyScalar(this.props.interaction.hoverScale);
+                    targetPosition.y += this.props.interaction.hoverOffsetY;
+                    // Add the "slide out" effect
+                    const outVector = cardGroup.userData.originalPosition.clone().normalize();
+                    targetPosition.add(outVector.multiplyScalar(this.props.interaction.hoverSlideOut));
+                }
+                if (cardGroup.userData.originalPosition && !cardGroup.position.equals(targetPosition)) {
+                    cardGroup.position.lerp(targetPosition, this.animationSpeed);
                 }
             }
-
-            // --- Hover Shimmer Animation ---
-            const frontMaterial = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as MeshPhysicalMaterial;
-            if (this.props.interaction.enableHover && this.hoveredMesh === mesh) {
-                if (!frontMaterial.userData.shimmerActive) {
-                    frontMaterial.userData.shimmerActive = true;
-                    // Start from a random point to desynchronize shimmers
-                    frontMaterial.userData.shimmerTime = Math.random() * 2.0;
-                }
-
-                frontMaterial.userData.shimmerTime += delta * 1.0; // Control shimmer speed
-                const shimmerLoopDuration = 2.0;
-                const shimmerProgress = (frontMaterial.userData.shimmerTime % shimmerLoopDuration) / shimmerLoopDuration;
-                
-                // Add easing for a more cinematic feel
-                const easeInOutCubic = (t: number) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-                const easedProgress = easeInOutCubic(shimmerProgress);
-
-                // Fade in intensity for a bright flash
-                frontMaterial.emissiveIntensity = Math.min(frontMaterial.emissiveIntensity + delta * 4.0, 1.5);
-
-                // Move the shimmer texture across the card
-                if (frontMaterial.emissiveMap) {
-                    // A larger range ensures the diagonal shimmer sweeps fully across
-                    frontMaterial.emissiveMap.offset.x = easedProgress * 3.0 - 1.5;
-                    frontMaterial.emissiveMap.needsUpdate = true;
-                }
+            
+            // Animate hover glow effect
+            const targetEmissive = (this.hoveredGroup === cardGroup && !this.immersiveGroup) ? 0.7 : 0;
+            if (Math.abs(frontMaterial.emissiveIntensity - targetEmissive) > 0.001) {
+                frontMaterial.emissiveIntensity = MathUtils.lerp(frontMaterial.emissiveIntensity, targetEmissive, this.animationSpeed * 2);
             } else {
-                if (frontMaterial.userData.shimmerActive) {
-                    // Fade out intensity
-                    frontMaterial.emissiveIntensity = Math.max(frontMaterial.emissiveIntensity - delta * 4.0, 0);
-
-                    if (frontMaterial.emissiveIntensity === 0) {
-                        frontMaterial.userData.shimmerActive = false;
-                    }
-                }
+                frontMaterial.emissiveIntensity = targetEmissive;
             }
 
-            // --- Opacity Fading Animation ---
+            // Animate fade for other cards
             const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            let targetOpacity = 1.0;
+            if (this.immersiveGroup) {
+                targetOpacity = cardGroup.userData.isFadingOut ? 0.4 : 1.0;
+            } else if (this.hoveredGroup) {
+                targetOpacity = (this.hoveredGroup === cardGroup) ? 1.0 : 0.4;
+            }
+
             materials.forEach(mat => {
-                const targetOpacity = mesh.userData.isFadingOut ? 0.4 : 1.0;
                 if (Math.abs(mat.opacity - targetOpacity) > 0.01) {
                     mat.opacity = MathUtils.lerp(mat.opacity, targetOpacity, this.animationSpeed);
                 } else {
@@ -622,8 +734,8 @@ export class WheelScene {
                 }
             });
         });
-
-
-        this.renderer.render(this.scene, this.camera);
+        
+        this.lastFrameRotationY = this.spinGroup.rotation.y;
+        this.composer.render();
     };
 }
