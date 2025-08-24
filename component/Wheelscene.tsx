@@ -49,7 +49,8 @@ export type WheelSceneProps = {
     borderRadius: number;
     backgroundColor: string;
     imageFit: "cover" | "fit" | "fill";
-    transform: { scale: number; positionX: number; positionY: number; positionZ: number; rotationX: number; rotationY: number; rotationZ: number; }
+    sceneTransform: { scale: number; positionX: number; positionY: number; positionZ: number; rotationX: number; rotationY: number; rotationZ: number; }
+    cardTransform: { rotationX: number; rotationY: number; rotationZ: number; }
     interaction: { enableScroll: boolean; dragSensitivity: number; flickSensitivity: number; clickSpeed: number; enableHover: boolean; hoverScale: number; hoverOffsetY: number; hoverSlideOut: number; }
     animation: { autoRotate: boolean; autoRotateDirection: "left" | "right"; autoRotateSpeed: number; bendingIntensity: number; bendingRange: number; bendingConstraint: "center" | "top" | "bottom" | "left" | "right"; }
 };
@@ -232,13 +233,13 @@ export class WheelScene {
         // --- Group Setup ---
         this.baseGroup = new Group();
         this.baseGroup.rotation.order = "YXZ";
-        const { transform } = this.props;
-        this.baseGroup.scale.set(transform.scale, transform.scale, transform.scale);
-        this.baseGroup.position.set(transform.positionX, transform.positionY, transform.positionZ);
+        const { sceneTransform } = this.props;
+        this.baseGroup.scale.set(sceneTransform.scale, sceneTransform.scale, sceneTransform.scale);
+        this.baseGroup.position.set(sceneTransform.positionX, sceneTransform.positionY, sceneTransform.positionZ);
         this.baseGroup.rotation.set(
-            MathUtils.degToRad(transform.rotationX),
-            MathUtils.degToRad(transform.rotationY),
-            MathUtils.degToRad(transform.rotationZ)
+            MathUtils.degToRad(sceneTransform.rotationX),
+            MathUtils.degToRad(sceneTransform.rotationY),
+            MathUtils.degToRad(sceneTransform.rotationZ)
         );
         this.scene.add(this.baseGroup);
 
@@ -269,6 +270,7 @@ export class WheelScene {
             this.props.cardHeight !== newProps.cardHeight ||
             this.props.borderRadius !== newProps.borderRadius ||
             this.props.imageFit !== newProps.imageFit ||
+            !propsAreEqual(this.props.cardTransform, newProps.cardTransform) ||
             this.props.animation.bendingConstraint !== newProps.animation.bendingConstraint;
 
         if (needsRebuild) {
@@ -279,13 +281,13 @@ export class WheelScene {
         }
 
         // Update animatable targets
-        const { transform, backgroundColor, interaction, animation } = newProps;
-        this.targetGroupPosition.set(transform.positionX, transform.positionY, transform.positionZ);
-        this.targetGroupScale.set(transform.scale, transform.scale, transform.scale);
+        const { sceneTransform, backgroundColor, interaction, animation } = newProps;
+        this.targetGroupPosition.set(sceneTransform.positionX, sceneTransform.positionY, sceneTransform.positionZ);
+        this.targetGroupScale.set(sceneTransform.scale, sceneTransform.scale, sceneTransform.scale);
         this.targetGroupRotation.set(
-            MathUtils.degToRad(transform.rotationX),
-            MathUtils.degToRad(transform.rotationY),
-            MathUtils.degToRad(transform.rotationZ)
+            MathUtils.degToRad(sceneTransform.rotationX),
+            MathUtils.degToRad(sceneTransform.rotationY),
+            MathUtils.degToRad(sceneTransform.rotationZ)
         );
         const { color: newBgColor, alpha: newBgAlpha } = parseColorAndAlpha(backgroundColor);
         this.targetBackgroundColor.copy(newBgColor);
@@ -307,7 +309,7 @@ export class WheelScene {
     }
 
     createCards() {
-        const { items, cardWidth, cardHeight, borderRadius, wheelRadius, transform, animation } = this.props;
+        const { items, cardWidth, cardHeight, borderRadius, wheelRadius, sceneTransform, cardTransform, animation } = this.props;
         const textureLoader = new TextureLoader();
 
         const cardBaseMaterial = new MeshPhysicalMaterial({
@@ -420,12 +422,24 @@ export class WheelScene {
             const position = new Vector3(Math.sin(angle) * wheelRadius, 0, Math.cos(angle) * wheelRadius);
             cardGroup.position.copy(position);
 
-            const tiltInRad = MathUtils.degToRad(transform.rotationX);
+            // Base orientation on the ring
+            const tiltInRad = MathUtils.degToRad(sceneTransform.rotationX);
             const euler = new Euler(tiltInRad, angle + Math.PI / 2, 0, "YXZ");
+            
+            // Apply individual card transform
+            const cardRotationEuler = new Euler(
+                MathUtils.degToRad(cardTransform.rotationX),
+                MathUtils.degToRad(cardTransform.rotationY),
+                MathUtils.degToRad(cardTransform.rotationZ),
+                "YXZ"
+            );
+            const cardRotationQuaternion = new Quaternion().setFromEuler(cardRotationEuler);
+            const finalQuaternion = new Quaternion().setFromEuler(euler).multiply(cardRotationQuaternion);
+
             cardGroup.userData = {
                 item,
                 originalPosition: position.clone(),
-                originalQuaternion: new Quaternion().setFromEuler(euler),
+                originalQuaternion: finalQuaternion,
                 isFadingOut: false,
                 physics: { angle: 0, velocity: 0 },
             };

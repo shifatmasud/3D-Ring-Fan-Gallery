@@ -22,7 +22,8 @@ type Item = {
 }
 
 type LayoutProps = { wheelRadius?: number; cardWidth?: number; cardHeight?: number; }
-type TransformProps = { scale?: number; positionX?: number; positionY?: number; positionZ?: number; rotationX?: number; rotationY?: number; rotationZ?: number; }
+type SceneTransformProps = { scale?: number; positionX?: number; positionY?: number; positionZ?: number; rotationX?: number; rotationY?: number; rotationZ?: number; }
+type CardTransformProps = { rotationX?: number; rotationY?: number; rotationZ?: number; }
 type AppearanceProps = { backgroundColor?: string; borderRadius?: number; imageFit?: "cover" | "fit" | "fill"; }
 type InteractionProps = { enableScroll?: boolean; dragSensitivity?: number; flickSensitivity?: number; clickSpeed?: number; enableHover?: boolean; hoverScale?: number; hoverOffsetY?: number; hoverSlideOut?: number; }
 type AnimationProps = { autoRotate?: boolean; autoRotateDirection?: "left" | "right"; autoRotateSpeed?: number; bendingIntensity?: number; bendingRange?: number; bendingConstraint?: "center" | "top" | "bottom" | "left" | "right"; }
@@ -30,7 +31,8 @@ type AnimationProps = { autoRotate?: boolean; autoRotateDirection?: "left" | "ri
 type RingfanProps = {
     items: Item[]
     layout?: LayoutProps
-    transform?: TransformProps
+    sceneTransform?: SceneTransformProps
+    cardTransform?: CardTransformProps
     appearance?: AppearanceProps
     interaction?: InteractionProps
     animation?: AnimationProps
@@ -38,7 +40,8 @@ type RingfanProps = {
 
 // --- Default Props ---
 const defaultLayout = { wheelRadius: 3.5, cardWidth: 1.2, cardHeight: 1.8 };
-const defaultTransform = { scale: 1, positionX: 0, positionY: 0, positionZ: 0, rotationX: 10, rotationY: 0, rotationZ: 0 };
+const defaultSceneTransform = { scale: 1, positionX: 0, positionY: 0, positionZ: 0, rotationX: 10, rotationY: 0, rotationZ: 0 };
+const defaultCardTransform = { rotationX: 0, rotationY: 0, rotationZ: 0 };
 const defaultAppearance = { backgroundColor: "transparent", borderRadius: 0.05, imageFit: "cover" as const };
 const defaultInteraction = { enableScroll: true, dragSensitivity: 1.5, flickSensitivity: 1.0, clickSpeed: 0.1, enableHover: true, hoverScale: 1.03, hoverOffsetY: 0.4, hoverSlideOut: 0.1 };
 const defaultAnimation = { autoRotate: false, autoRotateDirection: "right" as const, autoRotateSpeed: 5, bendingIntensity: 4.0, bendingRange: 0.8, bendingConstraint: "center" as const };
@@ -49,7 +52,8 @@ export default function Ringfan(props: RingfanProps) {
     const {
         items = [],
         layout: layoutProps = {},
-        transform: transformProps = {},
+        sceneTransform: sceneTransformProps = {},
+        cardTransform: cardTransformProps = {},
         appearance: appearanceProps = {},
         interaction: interactionProps = {},
         animation: animationProps = {},
@@ -57,7 +61,8 @@ export default function Ringfan(props: RingfanProps) {
 
     // Merge provided props with defaults for a complete configuration
     const layout = { ...defaultLayout, ...layoutProps };
-    const transform = { ...defaultTransform, ...transformProps };
+    const sceneTransform = { ...defaultSceneTransform, ...sceneTransformProps };
+    const cardTransform = { ...defaultCardTransform, ...cardTransformProps };
     const appearance = { ...defaultAppearance, ...appearanceProps };
     const interaction = { ...defaultInteraction, ...interactionProps };
     const animation = { ...defaultAnimation, ...animationProps };
@@ -72,7 +77,8 @@ export default function Ringfan(props: RingfanProps) {
             items,
             ...layout,
             ...appearance,
-            transform,
+            sceneTransform,
+            cardTransform,
             interaction,
             animation,
         };
@@ -84,7 +90,7 @@ export default function Ringfan(props: RingfanProps) {
             // Update existing scene with new props for smooth transitions
             sceneRef.current.update(sceneProps);
         }
-    }, [items, layout, transform, appearance, interaction, animation]);
+    }, [items, layout, sceneTransform, cardTransform, appearance, interaction, animation]);
 
     // Cleanup on unmount
     React.useEffect(() => {
@@ -127,9 +133,9 @@ addPropertyControls(Ringfan, {
             cardHeight: { type: ControlType.Number, title: "Card Height", defaultValue: 1.8, min: 0.1, max: 10, step: 0.1 },
         },
     },
-    transform: {
+    sceneTransform: {
         type: ControlType.Object,
-        title: "Transform",
+        title: "Scene Transform",
         controls: {
             scale: { type: ControlType.Number, title: "Scale", defaultValue: 1, min: 0.1, max: 5, step: 0.05 },
             positionX: { type: ControlType.Number, title: "Position X", defaultValue: 0, min: -10, max: 10, step: 0.1 },
@@ -139,6 +145,15 @@ addPropertyControls(Ringfan, {
             rotationY: { type: ControlType.Number, title: "Rotation Y", defaultValue: 0, min: -180, max: 180, step: 1 },
             rotationZ: { type: ControlType.Number, title: "Rotation Z", defaultValue: 0, min: -90, max: 90, step: 1 },
         },
+    },
+    cardTransform: {
+        type: ControlType.Object,
+        title: "Card Transform",
+        controls: {
+            rotationX: { type: ControlType.Number, title: "Rotation X", defaultValue: 0, min: -180, max: 180, step: 1 },
+            rotationY: { type: ControlType.Number, title: "Rotation Y", defaultValue: 0, min: -180, max: 180, step: 1 },
+            rotationZ: { type: ControlType.Number, title: "Rotation Z", defaultValue: 0, min: -180, max: 180, step: 1 },
+        }
     },
     appearance: {
         type: ControlType.Object,
