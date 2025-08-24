@@ -214,6 +214,7 @@ class WheelScene {
         this.renderer.setClearColor(bgColor, bgAlpha);
         this.renderer.outputColorSpace = SRGBColorSpace;
         this.renderer.toneMapping = ACESFilmicToneMapping;
+        this.renderer.autoClear = false;
         this.container.appendChild(this.renderer.domElement);
         this.container.style.cursor = "grab";
         this.container.style.touchAction = "none";
@@ -265,21 +266,68 @@ class WheelScene {
     update(newProps: WheelSceneProps) {
         const needsRebuild =
             !itemsAreEqual(this.props.items, newProps.items) ||
-            this.props.wheelRadius !== newProps.wheelRadius ||
-            this.props.cardWidth !== newProps.cardWidth ||
-            this.props.cardHeight !== newProps.cardHeight ||
             this.props.borderRadius !== newProps.borderRadius ||
-            this.props.imageFit !== newProps.imageFit ||
-            this.props.cardTransform.rotationX !== newProps.cardTransform.rotationX ||
-            this.props.cardTransform.rotationY !== newProps.cardTransform.rotationY ||
-            this.props.cardTransform.rotationZ !== newProps.cardTransform.rotationZ ||
-            this.props.animation.bendingConstraint !== newProps.animation.bendingConstraint;
+            this.props.imageFit !== newProps.imageFit;
 
         if (needsRebuild) {
             this.destroy();
             this.props = newProps;
             this.init();
             return;
+        }
+
+        const cardTransformChanged =
+            this.props.cardTransform.rotationX !== newProps.cardTransform.rotationX ||
+            this.props.cardTransform.rotationY !== newProps.cardTransform.rotationY ||
+            this.props.cardTransform.rotationZ !== newProps.cardTransform.rotationZ;
+
+        if (cardTransformChanged) {
+            this.spinGroup.children.forEach((cardGroup, i) => {
+                if (cardGroup instanceof Group) {
+                    const angle = (i / newProps.items.length) * Math.PI * 2;
+                    const baseEuler = new Euler(0, angle + Math.PI / 2, 0, "YXZ");
+                    const cardRotationEuler = new Euler(
+                        MathUtils.degToRad(newProps.cardTransform.rotationX),
+                        MathUtils.degToRad(newProps.cardTransform.rotationY),
+                        MathUtils.degToRad(newProps.cardTransform.rotationZ),
+                        "YXZ"
+                    );
+                    const cardRotationQuaternion = new Quaternion().setFromEuler(cardRotationEuler);
+                    const finalQuaternion = new Quaternion().setFromEuler(baseEuler).multiply(cardRotationQuaternion);
+                    cardGroup.userData.originalQuaternion = finalQuaternion;
+                }
+            });
+        }
+
+        const layoutChanged =
+            this.props.wheelRadius !== newProps.wheelRadius ||
+            this.props.cardWidth !== newProps.cardWidth ||
+            this.props.cardHeight !== newProps.cardHeight;
+        const bendingConstraintChanged = this.props.animation.bendingConstraint !== newProps.animation.bendingConstraint;
+    
+        if (layoutChanged || bendingConstraintChanged) {
+            this.spinGroup.children.forEach((cardGroup, i) => {
+                if (cardGroup instanceof Group && cardGroup.userData) {
+                    const angle = (i / newProps.items.length) * Math.PI * 2;
+                    const newPosition = new Vector3(Math.sin(angle) * newProps.wheelRadius, 0, Math.cos(angle) * newProps.wheelRadius);
+                    cardGroup.userData.targetPosition.copy(newPosition);
+
+                    cardGroup.userData.targetMeshScale.set(
+                        newProps.cardWidth / cardGroup.userData.geometryWidth,
+                        newProps.cardHeight / cardGroup.userData.geometryHeight,
+                        1
+                    );
+
+                    const offset = new Vector3();
+                    switch (newProps.animation.bendingConstraint) {
+                        case "top":    offset.y = -newProps.cardHeight / 2; break;
+                        case "bottom": offset.y =  newProps.cardHeight / 2; break;
+                        case "left":   offset.x =  newProps.cardWidth / 2; break;
+                        case "right":  offset.x = -newProps.cardWidth / 2; break;
+                    }
+                    cardGroup.userData.targetMeshPosition.copy(offset);
+                }
+            });
         }
 
         const { sceneTransform, backgroundColor, interaction, animation } = newProps;
@@ -303,7 +351,7 @@ class WheelScene {
     createCards() {
         if (!Array.isArray(this.props.items) || this.props.items.length === 0) return;
 
-        const { items, cardWidth, cardHeight, borderRadius, wheelRadius, sceneTransform, cardTransform, animation } = this.props;
+        const { items, cardWidth, cardHeight, borderRadius, wheelRadius, cardTransform, animation } = this.props;
         const textureLoader = new TextureLoader();
 
         const cardBaseMaterial = new MeshPhysicalMaterial({
@@ -395,14 +443,23 @@ class WheelScene {
             const position = new Vector3(Math.sin(angle) * wheelRadius, 0, Math.cos(angle) * wheelRadius);
             cardGroup.position.copy(position);
 
-            const tiltInRad = MathUtils.degToRad(sceneTransform.rotationX);
-            const euler = new Euler(tiltInRad, angle + Math.PI / 2, 0, "YXZ");
+            const euler = new Euler(0, angle + Math.PI / 2, 0, "YXZ");
             
             const cardRotationEuler = new Euler(MathUtils.degToRad(cardTransform.rotationX), MathUtils.degToRad(cardTransform.rotationY), MathUtils.degToRad(cardTransform.rotationZ), "YXZ");
             const cardRotationQuaternion = new Quaternion().setFromEuler(cardRotationEuler);
             const finalQuaternion = new Quaternion().setFromEuler(euler).multiply(cardRotationQuaternion);
 
-            cardGroup.userData = { item, originalPosition: position.clone(), originalQuaternion: finalQuaternion, isFadingOut: false, physics: { angle: 0, velocity: 0 } };
+            cardGroup.userData = { 
+                item, 
+                targetPosition: position.clone(), 
+                originalQuaternion: finalQuaternion, 
+                isFadingOut: false, 
+                physics: { angle: 0, velocity: 0 },
+                targetMeshScale: new Vector3(1, 1, 1),
+                targetMeshPosition: offset.clone(),
+                geometryWidth: cardWidth,
+                geometryHeight: cardHeight,
+            };
             cardGroup.quaternion.copy(cardGroup.userData.originalQuaternion);
             this.spinGroup.add(cardGroup);
         });
@@ -584,6 +641,9 @@ class WheelScene {
                 const targetLocalQuaternion = worldQuaternion.invert();
                 cardGroup.quaternion.slerp(targetLocalQuaternion, this.animationSpeed);
 
+                mesh.scale.lerp(new Vector3(1, 1, 1), this.animationSpeed);
+                mesh.position.lerp(new Vector3(0, 0, 0), this.animationSpeed);
+
             } else {
                 const physics = cardGroup.userData.physics;
                 let targetQuaternion = cardGroup.userData.originalQuaternion.clone();
@@ -605,14 +665,17 @@ class WheelScene {
                 }
                 cardGroup.quaternion.slerp(targetQuaternion, this.animationSpeed * 2.0);
 
-                let targetPosition = cardGroup.userData.originalPosition;
+                let finalTargetPosition = cardGroup.userData.targetPosition.clone();
                 if (this.props.interaction.enableHover && this.hoveredGroup === cardGroup) {
-                    targetPosition = cardGroup.userData.originalPosition.clone().multiplyScalar(this.props.interaction.hoverScale);
-                    targetPosition.y += this.props.interaction.hoverOffsetY;
-                    const outVector = cardGroup.userData.originalPosition.clone().normalize();
-                    targetPosition.add(outVector.multiplyScalar(this.props.interaction.hoverSlideOut));
+                    finalTargetPosition.multiplyScalar(this.props.interaction.hoverScale);
+                    finalTargetPosition.y += this.props.interaction.hoverOffsetY;
+                    const outVector = cardGroup.userData.targetPosition.clone().normalize();
+                    finalTargetPosition.add(outVector.multiplyScalar(this.props.interaction.hoverSlideOut));
                 }
-                cardGroup.position.lerp(targetPosition, this.animationSpeed);
+                cardGroup.position.lerp(finalTargetPosition, this.animationSpeed);
+
+                mesh.scale.lerp(cardGroup.userData.targetMeshScale, lerpFactor);
+                mesh.position.lerp(cardGroup.userData.targetMeshPosition, lerpFactor);
             }
             
             const targetEmissive = (this.hoveredGroup === cardGroup && !this.immersiveGroup) ? 0.7 : 0;
@@ -625,6 +688,7 @@ class WheelScene {
         });
         
         this.lastFrameRotationY = this.spinGroup.rotation.y;
+        this.renderer.clear();
         this.composer.render();
     };
 }
@@ -642,7 +706,6 @@ const defaultAnimation = { autoRotate: false, autoRotateDirection: "right" as co
 export default function Ringfan(props: RingfanProps) {
     const { layout: p1, sceneTransform: p2, cardTransform: p3, appearance: p4, interaction: p5, animation: p6 } = props;
     
-    // Architecturally robust guard for the `items` prop.
     const items = React.useMemo(() => {
         if (Array.isArray(props.items)) return props.items;
         if (props.items != null) console.warn("Ringfan `items` prop received a non-array value.", props.items);
@@ -709,18 +772,22 @@ addPropertyControls(Ringfan, {
     interaction: {
         type: ControlType.Object, title: "Interaction", defaultValue: defaultInteraction,
         controls: {
-            enableScroll: { type: ControlType.Boolean, title: "Enable Scroll", defaultValue: true }, dragSensitivity: { type: ControlType.Number, title: "Drag Sensitivity", defaultValue: 1.5, min: 0, max: 10, step: 0.1 }, flickSensitivity: { type: ControlType.Number, title: "Flick Sensitivity", defaultValue: 1.0, min: 0, max: 5, step: 0.1 }, clickSpeed: { type: ControlType.Number, title: "Click Speed", defaultValue: 0.1, min: 0.01, max: 0.2, step: 0.01 }, enableHover: { type: ControlType.Boolean, title: "Enable Hover", defaultValue: true },
-            hoverScale: { type: ControlType.Number, title: "Hover Scale", defaultValue: 1.03, min: 1, max: 2, step: 0.01, hidden: (props) => !props?.interaction?.enableHover },
-            hoverOffsetY: { type: ControlType.Number, title: "Hover Offset Y", defaultValue: 0.4, min: -2, max: 2, step: 0.05, hidden: (props) => !props?.interaction?.enableHover },
-            hoverSlideOut: { type: ControlType.Number, title: "Hover Slide Out", defaultValue: 0.1, min: -2, max: 2, step: 0.05, hidden: (props) => !props?.interaction?.enableHover },
+            enableScroll: { type: ControlType.Boolean, title: "Enable Scroll", defaultValue: true },
+            dragSensitivity: { type: ControlType.Number, title: "Drag Sensitivity", defaultValue: 1.5, min: 0, max: 10, step: 0.1 },
+            flickSensitivity: { type: ControlType.Number, title: "Flick Sensitivity", defaultValue: 1.0, min: 0, max: 5, step: 0.1 },
+            clickSpeed: { type: ControlType.Number, title: "Click Speed", defaultValue: 0.1, min: 0.01, max: 0.2, step: 0.01 },
+            enableHover: { type: ControlType.Boolean, title: "Enable Hover", defaultValue: true },
+            hoverScale: { type: ControlType.Number, title: "Hover Scale", defaultValue: 1.03, min: 1, max: 2, step: 0.01 },
+            hoverOffsetY: { type: ControlType.Number, title: "Hover Offset Y", defaultValue: 0.4, min: -2, max: 2, step: 0.05 },
+            hoverSlideOut: { type: ControlType.Number, title: "Hover Slide Out", defaultValue: 0.1, min: -2, max: 2, step: 0.05 },
         }
     },
     animation: {
         type: ControlType.Object, title: "Animation", defaultValue: defaultAnimation,
         controls: {
             autoRotate: { type: ControlType.Boolean, title: "Auto Rotate", defaultValue: false },
-            autoRotateDirection: { type: ControlType.Enum, title: "Direction", options: ["right", "left"], optionTitles: ["Right", "Left"], defaultValue: "right", hidden: (props) => !props?.animation?.autoRotate },
-            autoRotateSpeed: { type: ControlType.Number, title: "Speed (deg/s)", defaultValue: 5, min: 0, max: 90, step: 1, hidden: (props) => !props?.animation?.autoRotate },
+            autoRotateDirection: { type: ControlType.Enum, title: "Direction", options: ["right", "left"], optionTitles: ["Right", "Left"], defaultValue: "right" },
+            autoRotateSpeed: { type: ControlType.Number, title: "Speed (deg/s)", defaultValue: 5, min: 0, max: 90, step: 1 },
             bendingIntensity: { type: ControlType.Number, title: "Bending Intensity", defaultValue: 4, min: 0, max: 20, step: 0.5 },
             bendingRange: { type: ControlType.Number, title: "Bending Range", defaultValue: 0.8, min: 0, max: 2, step: 0.1 },
             bendingConstraint: { type: ControlType.Enum, title: "Bending Constraint", options: ["center", "top", "bottom", "left", "right"], optionTitles: ["Center", "Top", "Bottom", "Left", "Right"], defaultValue: "center" },

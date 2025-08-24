@@ -218,6 +218,7 @@ export class WheelScene {
         this.renderer.setClearColor(bgColor, bgAlpha);
         this.renderer.outputColorSpace = SRGBColorSpace;
         this.renderer.toneMapping = ACESFilmicToneMapping;
+        this.renderer.autoClear = false; // Required for post-processing with transparent bg
         this.container.appendChild(this.renderer.domElement);
         this.container.style.cursor = "grab";
         this.container.style.touchAction = "none"; // Recommended for pointer events
@@ -283,19 +284,12 @@ export class WheelScene {
     }
     
     update(newProps: WheelSceneProps) {
-        // Use robust, explicit comparisons instead of brittle JSON.stringify
+        // Only rebuild for major changes that can't be animated smoothly.
         const needsRebuild =
             !itemsAreEqual(this.props.items, newProps.items) ||
-            this.props.wheelRadius !== newProps.wheelRadius ||
-            this.props.cardWidth !== newProps.cardWidth ||
-            this.props.cardHeight !== newProps.cardHeight ||
             this.props.borderRadius !== newProps.borderRadius ||
-            this.props.imageFit !== newProps.imageFit ||
-            this.props.cardTransform.rotationX !== newProps.cardTransform.rotationX ||
-            this.props.cardTransform.rotationY !== newProps.cardTransform.rotationY ||
-            this.props.cardTransform.rotationZ !== newProps.cardTransform.rotationZ ||
-            this.props.animation.bendingConstraint !== newProps.animation.bendingConstraint;
-
+            this.props.imageFit !== newProps.imageFit;
+    
         if (needsRebuild) {
             this.destroy();
             this.props = newProps;
@@ -303,7 +297,63 @@ export class WheelScene {
             return;
         }
 
-        // Update animatable targets
+        // --- Animate Card Transform props ---
+        const cardTransformChanged =
+            this.props.cardTransform.rotationX !== newProps.cardTransform.rotationX ||
+            this.props.cardTransform.rotationY !== newProps.cardTransform.rotationY ||
+            this.props.cardTransform.rotationZ !== newProps.cardTransform.rotationZ;
+    
+        if (cardTransformChanged) {
+            this.spinGroup.children.forEach((cardGroup, i) => {
+                if (cardGroup instanceof Group) {
+                    const angle = (i / newProps.items.length) * Math.PI * 2;
+                    const baseEuler = new Euler(0, angle + Math.PI / 2, 0, "YXZ");
+                    const cardRotationEuler = new Euler(
+                        MathUtils.degToRad(newProps.cardTransform.rotationX),
+                        MathUtils.degToRad(newProps.cardTransform.rotationY),
+                        MathUtils.degToRad(newProps.cardTransform.rotationZ),
+                        "YXZ"
+                    );
+                    const cardRotationQuaternion = new Quaternion().setFromEuler(cardRotationEuler);
+                    const finalQuaternion = new Quaternion().setFromEuler(baseEuler).multiply(cardRotationQuaternion);
+                    cardGroup.userData.originalQuaternion = finalQuaternion;
+                }
+            });
+        }
+    
+        // --- Animate Layout and Bending props ---
+        const layoutChanged =
+            this.props.wheelRadius !== newProps.wheelRadius ||
+            this.props.cardWidth !== newProps.cardWidth ||
+            this.props.cardHeight !== newProps.cardHeight;
+        const bendingConstraintChanged = this.props.animation.bendingConstraint !== newProps.animation.bendingConstraint;
+    
+        if (layoutChanged || bendingConstraintChanged) {
+            this.spinGroup.children.forEach((cardGroup, i) => {
+                if (cardGroup instanceof Group && cardGroup.userData) {
+                    const angle = (i / newProps.items.length) * Math.PI * 2;
+                    const newPosition = new Vector3(Math.sin(angle) * newProps.wheelRadius, 0, Math.cos(angle) * newProps.wheelRadius);
+                    cardGroup.userData.targetPosition.copy(newPosition);
+
+                    cardGroup.userData.targetMeshScale.set(
+                        newProps.cardWidth / cardGroup.userData.geometryWidth,
+                        newProps.cardHeight / cardGroup.userData.geometryHeight,
+                        1
+                    );
+
+                    const offset = new Vector3();
+                    switch (newProps.animation.bendingConstraint) {
+                        case "top":    offset.y = -newProps.cardHeight / 2; break;
+                        case "bottom": offset.y =  newProps.cardHeight / 2; break;
+                        case "left":   offset.x =  newProps.cardWidth / 2; break;
+                        case "right":  offset.x = -newProps.cardWidth / 2; break;
+                    }
+                    cardGroup.userData.targetMeshPosition.copy(offset);
+                }
+            });
+        }
+    
+        // Update other animatable scene targets
         const { sceneTransform, backgroundColor, interaction, animation } = newProps;
         this.targetGroupPosition.set(sceneTransform.positionX, sceneTransform.positionY, sceneTransform.positionZ);
         this.targetGroupScale.set(sceneTransform.scale, sceneTransform.scale, sceneTransform.scale);
@@ -320,7 +370,7 @@ export class WheelScene {
         this.dragSensitivity = interaction.dragSensitivity / 100;
         this.flickSensitivity = interaction.flickSensitivity / 100;
         this.animationSpeed = interaction.clickSpeed;
-
+    
         if (animation.autoRotate) {
             const direction = animation.autoRotateDirection === 'left' ? -1 : 1;
             this.idleRotationSpeed = (animation.autoRotateSpeed * Math.PI / 180) * direction;
@@ -332,12 +382,11 @@ export class WheelScene {
     }
 
     createCards() {
-        // This guard is now backed by a stronger guarantee from the React component.
         if (!Array.isArray(this.props.items) || this.props.items.length === 0) {
             return;
         }
 
-        const { items, cardWidth, cardHeight, borderRadius, wheelRadius, sceneTransform, cardTransform, animation } = this.props;
+        const { items, cardWidth, cardHeight, borderRadius, wheelRadius, cardTransform, animation } = this.props;
         const textureLoader = new TextureLoader();
 
         const cardBaseMaterial = new MeshPhysicalMaterial({
@@ -352,10 +401,8 @@ export class WheelScene {
         items.forEach((item, i) => {
             const frontMaterial = cardBaseMaterial.clone() as MeshPhysicalMaterial;
             
-            // Emissive color acts as a multiplier for the emissive map (the texture).
-            // White means the texture colors will be used for the glow.
             frontMaterial.emissive = new Color(0xFFFFFF); 
-            frontMaterial.emissiveIntensity = 0; // Start with no glow
+            frontMaterial.emissiveIntensity = 0;
 
             textureLoader.load(item.image, (texture) => {
                 texture.wrapS = ClampToEdgeWrapping;
@@ -391,7 +438,7 @@ export class WheelScene {
                 texture.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
                 texture.colorSpace = SRGBColorSpace;
                 frontMaterial.map = texture;
-                frontMaterial.emissiveMap = texture; // Use the image for the glow color
+                frontMaterial.emissiveMap = texture;
                 frontMaterial.needsUpdate = true;
             });
 
@@ -399,29 +446,16 @@ export class WheelScene {
             const extrudeSettings = { depth: 0.05, bevelEnabled: false };
             const geometry = new ExtrudeGeometry(shape, extrudeSettings);
 
-            // --- Correct UV Mapping for front and back faces ---
             const uvAttribute = geometry.attributes.uv;
             const positionAttribute = geometry.attributes.position;
             for (let i = 0; i < positionAttribute.count; i++) {
                 const z = positionAttribute.getZ(i);
                 const x = positionAttribute.getX(i);
                 const y = positionAttribute.getY(i);
-
-                // Front face (z is at the extruded depth)
                 if (Math.abs(z - extrudeSettings.depth) < 0.0001) {
-                    uvAttribute.setXY(
-                        i,
-                        (x + cardWidth / 2) / cardWidth,
-                        (y + cardHeight / 2) / cardHeight
-                    );
-                } 
-                // Back face (z is at 0)
-                else if (Math.abs(z) < 0.0001) {
-                    uvAttribute.setXY(
-                        i,
-                        1 - ((x + cardWidth / 2) / cardWidth), // Flip U for back
-                        (y + cardHeight / 2) / cardHeight
-                    );
+                    uvAttribute.setXY(i, (x + cardWidth / 2) / cardWidth, (y + cardHeight / 2) / cardHeight);
+                } else if (Math.abs(z) < 0.0001) {
+                    uvAttribute.setXY(i, 1 - ((x + cardWidth / 2) / cardWidth), (y + cardHeight / 2) / cardHeight);
                 }
             }
             uvAttribute.needsUpdate = true;
@@ -430,11 +464,9 @@ export class WheelScene {
             const sideMaterial = cardBaseMaterial.clone();
             (sideMaterial.color as Color).set(0xf0f0f0);
 
-            // --- Create a group for each card to handle pivot-based bending ---
             const cardGroup = new Group();
             const mesh = new Mesh(geometry, [frontMaterial, sideMaterial]);
 
-            // Offset the mesh within the group based on the bending constraint
             const offset = new Vector3();
             switch (animation.bendingConstraint) {
                 case "top":    offset.y = -cardHeight / 2; break;
@@ -445,16 +477,12 @@ export class WheelScene {
             mesh.position.copy(offset);
             cardGroup.add(mesh);
 
-            // Position and orient the group in the ring
             const angle = (i / items.length) * Math.PI * 2;
             const position = new Vector3(Math.sin(angle) * wheelRadius, 0, Math.cos(angle) * wheelRadius);
             cardGroup.position.copy(position);
 
-            // Base orientation on the ring
-            const tiltInRad = MathUtils.degToRad(sceneTransform.rotationX);
-            const euler = new Euler(tiltInRad, angle + Math.PI / 2, 0, "YXZ");
+            const euler = new Euler(0, angle + Math.PI / 2, 0, "YXZ");
             
-            // Apply individual card transform
             const cardRotationEuler = new Euler(
                 MathUtils.degToRad(cardTransform.rotationX),
                 MathUtils.degToRad(cardTransform.rotationY),
@@ -466,10 +494,14 @@ export class WheelScene {
 
             cardGroup.userData = {
                 item,
-                originalPosition: position.clone(),
+                targetPosition: position.clone(),
                 originalQuaternion: finalQuaternion,
                 isFadingOut: false,
                 physics: { angle: 0, velocity: 0 },
+                targetMeshScale: new Vector3(1, 1, 1),
+                targetMeshPosition: offset.clone(),
+                geometryWidth: cardWidth,
+                geometryHeight: cardHeight,
             };
             cardGroup.quaternion.copy(cardGroup.userData.originalQuaternion);
             this.spinGroup.add(cardGroup);
@@ -708,11 +740,14 @@ export class WheelScene {
                 const targetLocalQuaternion = worldQuaternion.invert();
                 cardGroup.quaternion.slerp(targetLocalQuaternion, this.animationSpeed);
 
+                // Animate mesh back to a neutral state for immersive view
+                mesh.scale.lerp(new Vector3(1, 1, 1), this.animationSpeed);
+                mesh.position.lerp(new Vector3(0, 0, 0), this.animationSpeed);
+
             } else {
                 const physics = cardGroup.userData.physics;
                 let targetQuaternion = cardGroup.userData.originalQuaternion.clone();
                 if (physics) {
-                    // Increased stiffness for more responsive bending during drag
                     const stiffness = 0.1;
                     const damping = 0.2;
                     const { bendingIntensity, bendingRange, bendingConstraint } = this.props.animation;
@@ -730,7 +765,6 @@ export class WheelScene {
                     targetQuaternion.multiply(physicsRotation);
                 }
 
-                // Elegance: Add a gentle tilt on hover
                 if (this.props.interaction.enableHover && this.hoveredGroup === cardGroup) {
                     const tiltQuaternion = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), MathUtils.degToRad(-5));
                     targetQuaternion.multiply(tiltQuaternion);
@@ -738,17 +772,18 @@ export class WheelScene {
 
                 cardGroup.quaternion.slerp(targetQuaternion, this.animationSpeed * 2.0);
 
-                let targetPosition = cardGroup.userData.originalPosition;
+                let finalTargetPosition = cardGroup.userData.targetPosition.clone();
                 if (this.props.interaction.enableHover && this.hoveredGroup === cardGroup) {
-                    targetPosition = cardGroup.userData.originalPosition.clone().multiplyScalar(this.props.interaction.hoverScale);
-                    targetPosition.y += this.props.interaction.hoverOffsetY;
-                    // Add the "slide out" effect
-                    const outVector = cardGroup.userData.originalPosition.clone().normalize();
-                    targetPosition.add(outVector.multiplyScalar(this.props.interaction.hoverSlideOut));
+                    finalTargetPosition.multiplyScalar(this.props.interaction.hoverScale);
+                    finalTargetPosition.y += this.props.interaction.hoverOffsetY;
+                    const outVector = cardGroup.userData.targetPosition.clone().normalize();
+                    finalTargetPosition.add(outVector.multiplyScalar(this.props.interaction.hoverSlideOut));
                 }
-                if (cardGroup.userData.originalPosition && !cardGroup.position.equals(targetPosition)) {
-                    cardGroup.position.lerp(targetPosition, this.animationSpeed);
-                }
+                cardGroup.position.lerp(finalTargetPosition, this.animationSpeed);
+
+                // Animate mesh scale and pivot position based on layout props
+                mesh.scale.lerp(cardGroup.userData.targetMeshScale, lerpFactor);
+                mesh.position.lerp(cardGroup.userData.targetMeshPosition, lerpFactor);
             }
             
             // Animate hover glow effect
@@ -778,6 +813,7 @@ export class WheelScene {
         });
         
         this.lastFrameRotationY = this.spinGroup.rotation.y;
+        this.renderer.clear();
         this.composer.render();
     };
 }

@@ -200,9 +200,9 @@ addPropertyControls(Ringfan, {
             flickSensitivity: { type: ControlType.Number, title: "Flick Sensitivity", defaultValue: 1.0, min: 0, max: 5, step: 0.1 },
             clickSpeed: { type: ControlType.Number, title: "Click Speed", defaultValue: 0.1, min: 0.01, max: 0.2, step: 0.01 },
             enableHover: { type: ControlType.Boolean, title: "Enable Hover", defaultValue: true },
-            hoverScale: { type: ControlType.Number, title: "Hover Scale", defaultValue: 1.03, min: 1, max: 2, step: 0.01, hidden: (props) => !props?.interaction?.enableHover },
-            hoverOffsetY: { type: ControlType.Number, title: "Hover Offset Y", defaultValue: 0.4, min: -2, max: 2, step: 0.05, hidden: (props) => !props?.interaction?.enableHover },
-            hoverSlideOut: { type: ControlType.Number, title: "Hover Slide Out", defaultValue: 0.1, min: -2, max: 2, step: 0.05, hidden: (props) => !props?.interaction?.enableHover },
+            hoverScale: { type: ControlType.Number, title: "Hover Scale", defaultValue: 1.03, min: 1, max: 2, step: 0.01 },
+            hoverOffsetY: { type: ControlType.Number, title: "Hover Offset Y", defaultValue: 0.4, min: -2, max: 2, step: 0.05 },
+            hoverSlideOut: { type: ControlType.Number, title: "Hover Slide Out", defaultValue: 0.1, min: -2, max: 2, step: 0.05 },
         }
     },
     animation: {
@@ -217,7 +217,6 @@ addPropertyControls(Ringfan, {
                 options: ["right", "left"],
                 optionTitles: ["Right", "Left"],
                 defaultValue: "right",
-                hidden: (props) => !props?.animation?.autoRotate,
             },
             autoRotateSpeed: {
                 type: ControlType.Number,
@@ -226,7 +225,6 @@ addPropertyControls(Ringfan, {
                 min: 0,
                 max: 90,
                 step: 1,
-                hidden: (props) => !props?.animation?.autoRotate,
             },
             bendingIntensity: { type: ControlType.Number, title: "Bending Intensity", defaultValue: 4, min: 0, max: 20, step: 0.5 },
             bendingRange: { type: ControlType.Number, title: "Bending Range", defaultValue: 0.8, min: 0, max: 2, step: 0.1 },
