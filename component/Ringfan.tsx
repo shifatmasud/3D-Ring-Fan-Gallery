@@ -29,7 +29,7 @@ type InteractionProps = { enableScroll?: boolean; dragSensitivity?: number; flic
 type AnimationProps = { autoRotate?: boolean; autoRotateDirection?: "left" | "right"; autoRotateSpeed?: number; bendingIntensity?: number; bendingRange?: number; bendingConstraint?: "center" | "top" | "bottom" | "left" | "right"; }
 
 type RingfanProps = {
-    items: Item[]
+    items?: Item[] | null
     layout?: LayoutProps
     sceneTransform?: SceneTransformProps
     cardTransform?: CardTransformProps
@@ -50,7 +50,7 @@ const defaultAnimation = { autoRotate: false, autoRotateDirection: "right" as co
 // --- Main Ringfan Component ---
 export default function Ringfan(props: RingfanProps) {
     const {
-        items = [],
+        // Items prop is handled separately below for robustness
         layout: layoutProps = {},
         sceneTransform: sceneTransformProps = {},
         cardTransform: cardTransformProps = {},
@@ -58,6 +58,21 @@ export default function Ringfan(props: RingfanProps) {
         interaction: interactionProps = {},
         animation: animationProps = {},
     } = props
+
+    // Architecturally robust guard for the `items` prop using `useMemo`.
+    // This ensures that no matter what Framer passes (undefined, null, or even non-array values),
+    // we always provide a stable, valid array to the underlying Three.js scene.
+    // This is the primary fix for the "Cannot read properties of undefined (reading 'length')" error.
+    const items = React.useMemo(() => {
+        if (Array.isArray(props.items)) {
+            return props.items;
+        }
+        // Add a warning for developers if Framer passes unexpected data.
+        if (props.items != null) {
+            console.warn("Ringfan `items` prop received a non-array value, defaulting to an empty array. Received:", props.items);
+        }
+        return [];
+    }, [props.items]);
 
     // Merge provided props with defaults for a complete configuration
     const layout = { ...defaultLayout, ...layoutProps };
@@ -115,6 +130,7 @@ addPropertyControls(Ringfan, {
     items: {
         type: ControlType.Array,
         title: "Items",
+        defaultValue: [],
         control: {
             type: ControlType.Object,
             controls: {
@@ -127,6 +143,7 @@ addPropertyControls(Ringfan, {
     layout: {
         type: ControlType.Object,
         title: "Layout",
+        defaultValue: defaultLayout,
         controls: {
             wheelRadius: { type: ControlType.Number, title: "Wheel Radius", defaultValue: 3.5, min: 0, max: 20, step: 0.1 },
             cardWidth: { type: ControlType.Number, title: "Card Width", defaultValue: 1.2, min: 0.1, max: 10, step: 0.1 },
@@ -136,6 +153,7 @@ addPropertyControls(Ringfan, {
     sceneTransform: {
         type: ControlType.Object,
         title: "Scene Transform",
+        defaultValue: defaultSceneTransform,
         controls: {
             scale: { type: ControlType.Number, title: "Scale", defaultValue: 1, min: 0.1, max: 5, step: 0.05 },
             positionX: { type: ControlType.Number, title: "Position X", defaultValue: 0, min: -10, max: 10, step: 0.1 },
@@ -149,6 +167,7 @@ addPropertyControls(Ringfan, {
     cardTransform: {
         type: ControlType.Object,
         title: "Card Transform",
+        defaultValue: defaultCardTransform,
         controls: {
             rotationX: { type: ControlType.Number, title: "Rotation X", defaultValue: 0, min: -180, max: 180, step: 1 },
             rotationY: { type: ControlType.Number, title: "Rotation Y", defaultValue: 0, min: -180, max: 180, step: 1 },
@@ -158,6 +177,7 @@ addPropertyControls(Ringfan, {
     appearance: {
         type: ControlType.Object,
         title: "Appearance",
+        defaultValue: defaultAppearance,
         controls: {
             backgroundColor: { type: ControlType.Color, title: "Background", defaultValue: "transparent" },
             borderRadius: { type: ControlType.Number, title: "Card Radius", defaultValue: 0.05, min: 0, max: 0.5, step: 0.01 },
@@ -173,20 +193,22 @@ addPropertyControls(Ringfan, {
     interaction: {
         type: ControlType.Object,
         title: "Interaction",
+        defaultValue: defaultInteraction,
         controls: {
             enableScroll: { type: ControlType.Boolean, title: "Enable Scroll", defaultValue: true },
             dragSensitivity: { type: ControlType.Number, title: "Drag Sensitivity", defaultValue: 1.5, min: 0, max: 10, step: 0.1 },
             flickSensitivity: { type: ControlType.Number, title: "Flick Sensitivity", defaultValue: 1.0, min: 0, max: 5, step: 0.1 },
             clickSpeed: { type: ControlType.Number, title: "Click Speed", defaultValue: 0.1, min: 0.01, max: 0.2, step: 0.01 },
             enableHover: { type: ControlType.Boolean, title: "Enable Hover", defaultValue: true },
-            hoverScale: { type: ControlType.Number, title: "Hover Scale", defaultValue: 1.03, min: 1, max: 2, step: 0.01, hidden: (props) => !props.interaction?.enableHover },
-            hoverOffsetY: { type: ControlType.Number, title: "Hover Offset Y", defaultValue: 0.4, min: -2, max: 2, step: 0.05, hidden: (props) => !props.interaction?.enableHover },
-            hoverSlideOut: { type: ControlType.Number, title: "Hover Slide Out", defaultValue: 0.1, min: -2, max: 2, step: 0.05, hidden: (props) => !props.interaction?.enableHover },
+            hoverScale: { type: ControlType.Number, title: "Hover Scale", defaultValue: 1.03, min: 1, max: 2, step: 0.01, hidden: (props) => !props?.interaction?.enableHover },
+            hoverOffsetY: { type: ControlType.Number, title: "Hover Offset Y", defaultValue: 0.4, min: -2, max: 2, step: 0.05, hidden: (props) => !props?.interaction?.enableHover },
+            hoverSlideOut: { type: ControlType.Number, title: "Hover Slide Out", defaultValue: 0.1, min: -2, max: 2, step: 0.05, hidden: (props) => !props?.interaction?.enableHover },
         }
     },
     animation: {
         type: ControlType.Object,
         title: "Animation",
+        defaultValue: defaultAnimation,
         controls: {
             autoRotate: { type: ControlType.Boolean, title: "Auto Rotate", defaultValue: false },
             autoRotateDirection: {
@@ -195,7 +217,7 @@ addPropertyControls(Ringfan, {
                 options: ["right", "left"],
                 optionTitles: ["Right", "Left"],
                 defaultValue: "right",
-                hidden: (props) => !props.animation?.autoRotate,
+                hidden: (props) => !props?.animation?.autoRotate,
             },
             autoRotateSpeed: {
                 type: ControlType.Number,
@@ -204,7 +226,7 @@ addPropertyControls(Ringfan, {
                 min: 0,
                 max: 90,
                 step: 1,
-                hidden: (props) => !props.animation?.autoRotate,
+                hidden: (props) => !props?.animation?.autoRotate,
             },
             bendingIntensity: { type: ControlType.Number, title: "Bending Intensity", defaultValue: 4, min: 0, max: 20, step: 0.5 },
             bendingRange: { type: ControlType.Number, title: "Bending Range", defaultValue: 0.8, min: 0, max: 2, step: 0.1 },
