@@ -3,8 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// --- IMPORTS ---
+import * as React from "react"
+import { addPropertyControls, ControlType } from "framer"
 import {
     ACESFilmicToneMapping,
+    CanvasTexture,
     Clock,
     Color,
     DirectionalLight,
@@ -33,36 +37,49 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 
-// --- Type Definitions ---
+// --- TYPE DEFINITIONS ---
 type Item = {
     image: string;
     link?: string;
     openInNewTab?: boolean;
 };
 
-type LightProps = {
-    enableLights: boolean;
-    hemisphereLight: { skyColor: string; groundColor: string; intensity: number };
-    keyLight: { color: string; intensity: number; positionX: number; positionY: number; positionZ: number };
-    fillLight: { color: string; intensity: number; positionX: number; positionY: number; positionZ: number };
-}
-
-export type WheelSceneProps = {
+type WheelSceneProps = {
     items: Item[];
     wheelRadius: number;
     cardWidth: number;
     cardHeight: number;
-    extrusion: number;
     borderRadius: number;
     backgroundColor: string;
     imageFit: "cover" | "fit" | "fill";
     sceneTransform: { scale: number; positionX: number; positionY: number; positionZ: number; rotationX: number; rotationY: number; rotationZ: number; }
     cardTransform: { rotationX: number; rotationY: number; rotationZ: number; }
-    interaction: { enableClick: boolean; enableScroll: boolean; dragSensitivity: number; flickSensitivity: number; clickSpeed: number; enableHover: boolean; hoverScale: number; hoverOffsetY: number; hoverSlideOut: number; }
+    interaction: { enableScroll: boolean; dragSensitivity: number; flickSensitivity: number; clickSpeed: number; enableHover: boolean; hoverScale: number; hoverOffsetY: number; hoverSlideOut: number; }
     animation: { autoRotate: boolean; autoRotateDirection: "left" | "right"; autoRotateSpeed: number; bendingIntensity: number; bendingRange: number; bendingConstraint: "center" | "top" | "bottom" | "left" | "right"; }
     effects: { enableBloom: boolean; bloomStrength: number; bloomRadius: number; bloomThreshold: number; }
-    lighting: LightProps;
 };
+
+type LayoutProps = { wheelRadius?: number; cardWidth?: number; cardHeight?: number; }
+type SceneTransformProps = { scale?: number; positionX?: number; positionY?: number; positionZ?: number; rotationX?: number; rotationY?: number; rotationZ?: number; }
+type CardTransformProps = { rotationX?: number; rotationY?: number; rotationZ?: number; }
+type AppearanceProps = { backgroundColor?: string; borderRadius?: number; imageFit?: "cover" | "fit" | "fill"; }
+type InteractionProps = { enableScroll?: boolean; dragSensitivity?: number; flickSensitivity?: number; clickSpeed?: number; enableHover?: boolean; hoverScale?: number; hoverOffsetY?: number; hoverSlideOut?: number; }
+type AnimationProps = { autoRotate?: boolean; autoRotateDirection?: "left" | "right"; autoRotateSpeed?: number; bendingIntensity?: number; bendingRange?: number; bendingConstraint?: "center" | "top" | "bottom" | "left" | "right"; }
+type EffectsProps = { enableBloom?: boolean; bloomStrength?: number; bloomRadius?: number; bloomThreshold?: number; }
+
+type RingfanProps = {
+    items?: Item[] | null
+    layout?: LayoutProps
+    sceneTransform?: SceneTransformProps
+    cardTransform?: CardTransformProps
+    appearance?: AppearanceProps
+    interaction?: InteractionProps
+    animation?: AnimationProps
+    effects?: EffectsProps
+}
+
+
+// --- THREE.JS HELPER FUNCTIONS & CLASS ---
 
 /**
  * Parses a CSS color string to extract a THREE.Color and an alpha value.
@@ -131,7 +148,10 @@ const itemsAreEqual = (a: Item[], b: Item[]): boolean => {
     return true;
 };
 
-export class WheelScene {
+/**
+ * The main Three.js scene manager class.
+ */
+class WheelScene {
     // --- Scene components ---
     container: HTMLDivElement;
     props: WheelSceneProps;
@@ -146,12 +166,6 @@ export class WheelScene {
     spinGroup: Group;
     animationFrameId: number;
 
-    // --- Lights ---
-    hemisphereLight?: HemisphereLight | null;
-    keyLight?: DirectionalLight | null;
-    fillLight?: DirectionalLight | null;
-
-
     // --- Interaction & Physics State ---
     isDragging = false;
     dragStart = { x: 0, y: 0 };
@@ -165,10 +179,6 @@ export class WheelScene {
     flickSensitivity: number;
     scrollSensitivity = 0.0009;
     idleRotationSpeed: number;
-
-    // --- Zoom State ---
-    minZoom: number;
-    maxZoom: number;
 
     // --- Hover & Immersive State ---
     hoveredGroup: Group | null = null;
@@ -216,8 +226,6 @@ export class WheelScene {
         this.scene.background = null;
         this.camera = new PerspectiveCamera(55, this.container.clientWidth / this.container.clientHeight, 0.1, 1000);
         this.camera.position.set(0, 0, this.props.wheelRadius * 2.8);
-        this.minZoom = this.props.wheelRadius * 1.5;
-        this.maxZoom = this.props.wheelRadius * 4.0;
         this.camera.lookAt(0, 0, 0);
 
         const renderPass = new RenderPass(this.scene, this.camera);
@@ -232,7 +240,13 @@ export class WheelScene {
         this.composer.addPass(renderPass);
         this.composer.addPass(this.bloomPass);
 
-        this.setupLights();
+        this.scene.add(new HemisphereLight(0x8888ff, 0x444400, 1.5));
+        const keyLight = new DirectionalLight(0xffffff, 2.0);
+        keyLight.position.set(5, 10, 5);
+        this.scene.add(keyLight);
+        const fillLight = new DirectionalLight(0xffffff, 1.0);
+        fillLight.position.set(-5, -5, 10);
+        this.scene.add(fillLight);
 
         this.baseGroup = new Group();
         this.baseGroup.rotation.order = "YXZ";
@@ -262,7 +276,6 @@ export class WheelScene {
         const needsRebuild =
             !itemsAreEqual(this.props.items, newProps.items) ||
             this.props.borderRadius !== newProps.borderRadius ||
-            this.props.extrusion !== newProps.extrusion ||
             this.props.imageFit !== newProps.imageFit;
 
         if (needsRebuild) {
@@ -271,8 +284,6 @@ export class WheelScene {
             this.init();
             return;
         }
-
-        this.updateLights(newProps.lighting);
 
         const cardTransformChanged =
             this.props.cardTransform.rotationX !== newProps.cardTransform.rotationX ||
@@ -351,58 +362,10 @@ export class WheelScene {
         this.props = newProps;
     }
 
-    setupLights() {
-        const { lighting } = this.props;
-        if (lighting.enableLights) {
-            this.hemisphereLight = new HemisphereLight(lighting.hemisphereLight.skyColor, lighting.hemisphereLight.groundColor, lighting.hemisphereLight.intensity);
-            this.scene.add(this.hemisphereLight);
-
-            this.keyLight = new DirectionalLight(lighting.keyLight.color, lighting.keyLight.intensity);
-            this.keyLight.position.set(lighting.keyLight.positionX, lighting.keyLight.positionY, lighting.keyLight.positionZ);
-            this.scene.add(this.keyLight);
-
-            this.fillLight = new DirectionalLight(lighting.fillLight.color, lighting.fillLight.intensity);
-            this.fillLight.position.set(lighting.fillLight.positionX, lighting.fillLight.positionY, lighting.fillLight.positionZ);
-            this.scene.add(this.fillLight);
-        }
-    }
-
-    removeLights() {
-        if (this.hemisphereLight) this.scene.remove(this.hemisphereLight);
-        if (this.keyLight) this.scene.remove(this.keyLight);
-        if (this.fillLight) this.scene.remove(this.fillLight);
-        this.hemisphereLight = null;
-        this.keyLight = null;
-        this.fillLight = null;
-    }
-
-    updateLights(newLighting: LightProps) {
-        const oldLighting = this.props.lighting;
-        if (newLighting.enableLights !== oldLighting.enableLights) {
-            if (newLighting.enableLights) {
-                this.setupLights();
-            } else {
-                this.removeLights();
-            }
-        } else if (newLighting.enableLights && this.hemisphereLight && this.keyLight && this.fillLight) {
-            this.hemisphereLight.color.set(newLighting.hemisphereLight.skyColor);
-            this.hemisphereLight.groundColor.set(newLighting.hemisphereLight.groundColor);
-            this.hemisphereLight.intensity = newLighting.hemisphereLight.intensity;
-            
-            this.keyLight.color.set(newLighting.keyLight.color);
-            this.keyLight.intensity = newLighting.keyLight.intensity;
-            this.keyLight.position.set(newLighting.keyLight.positionX, newLighting.keyLight.positionY, newLighting.keyLight.positionZ);
-
-            this.fillLight.color.set(newLighting.fillLight.color);
-            this.fillLight.intensity = newLighting.fillLight.intensity;
-            this.fillLight.position.set(newLighting.fillLight.positionX, newLighting.fillLight.positionY, newLighting.fillLight.positionZ);
-        }
-    }
-
     createCards() {
         if (!Array.isArray(this.props.items) || this.props.items.length === 0) return;
 
-        const { items, cardWidth, cardHeight, borderRadius, extrusion, wheelRadius, cardTransform, animation } = this.props;
+        const { items, cardWidth, cardHeight, borderRadius, wheelRadius, cardTransform, animation } = this.props;
         const textureLoader = new TextureLoader();
 
         const cardBaseMaterial = new MeshPhysicalMaterial({
@@ -458,7 +421,7 @@ export class WheelScene {
             });
 
             const shape = createRoundedRectShape(cardWidth, cardHeight, borderRadius);
-            const extrudeSettings = { depth: extrusion, bevelEnabled: false };
+            const extrudeSettings = { depth: 0.05, bevelEnabled: false };
             const geometry = new ExtrudeGeometry(shape, extrudeSettings);
 
             const uvAttribute = geometry.attributes.uv;
@@ -581,7 +544,7 @@ export class WheelScene {
 
         if (this.isDragging && dragDistance >= this.clickThreshold) {
             this.rotationSpeed = this.pointerVelocity * this.flickSensitivity;
-        } else if (this.props.interaction.enableClick) {
+        } else {
             if (this.immersiveGroup) {
                  const { link, openInNewTab } = this.immersiveGroup.userData.item;
                  if (link && link !== "#") window.open(link, openInNewTab ? "_blank" : "_self");
@@ -603,12 +566,7 @@ export class WheelScene {
     onWheel = (e: WheelEvent) => {
         e.preventDefault();
         if (this.immersiveGroup) return;
-        if (e.ctrlKey || e.metaKey) {
-            const zoomAmount = e.deltaY * 0.025;
-            this.camera.position.z = MathUtils.clamp(this.camera.position.z + zoomAmount, this.minZoom, this.maxZoom);
-        } else {
-            this.rotationSpeed += e.deltaY * this.scrollSensitivity;
-        }
+        this.rotationSpeed += e.deltaY * this.scrollSensitivity;
     };
 
     updateHover = (e: PointerEvent) => {
@@ -748,3 +706,116 @@ export class WheelScene {
         this.composer.render();
     };
 }
+
+
+// --- REACT COMPONENT & FRAMER CONTROLS ---
+
+const defaultLayout = { wheelRadius: 3.5, cardWidth: 1.2, cardHeight: 1.8 };
+const defaultSceneTransform = { scale: 1, positionX: 0, positionY: 0, positionZ: 0, rotationX: 10, rotationY: 0, rotationZ: 0 };
+const defaultCardTransform = { rotationX: 0, rotationY: 0, rotationZ: 0 };
+const defaultAppearance = { backgroundColor: "transparent", borderRadius: 0.05, imageFit: "cover" as const };
+const defaultInteraction = { enableScroll: true, dragSensitivity: 1.5, flickSensitivity: 1.0, clickSpeed: 0.1, enableHover: true, hoverScale: 1.03, hoverOffsetY: 0.4, hoverSlideOut: 0.1 };
+const defaultAnimation = { autoRotate: false, autoRotateDirection: "right" as const, autoRotateSpeed: 5, bendingIntensity: 4.0, bendingRange: 0.8, bendingConstraint: "center" as const };
+const defaultEffects = { enableBloom: true, bloomStrength: 0.4, bloomRadius: 0.1, bloomThreshold: 0.85 };
+
+export default function Ringfan(props: RingfanProps) {
+    const { layout: p1, sceneTransform: p2, cardTransform: p3, appearance: p4, interaction: p5, animation: p6, effects: p7 } = props;
+    
+    const items = React.useMemo(() => {
+        if (Array.isArray(props.items)) return props.items;
+        if (props.items != null) console.warn("Ringfan `items` prop received a non-array value.", props.items);
+        return [];
+    }, [props.items]);
+
+    const layout = { ...defaultLayout, ...p1 };
+    const sceneTransform = { ...defaultSceneTransform, ...p2 };
+    const cardTransform = { ...defaultCardTransform, ...p3 };
+    const appearance = { ...defaultAppearance, ...p4 };
+    const interaction = { ...defaultInteraction, ...p5 };
+    const animation = { ...defaultAnimation, ...p6 };
+    const effects = { ...defaultEffects, ...p7 };
+
+    const containerRef = React.useRef<HTMLDivElement>(null)
+    const sceneRef = React.useRef<WheelScene | null>(null);
+
+    React.useLayoutEffect(() => {
+        if (!containerRef.current) return;
+        const sceneProps: WheelSceneProps = { items, ...layout, ...appearance, sceneTransform, cardTransform, interaction, animation, effects };
+        if (!sceneRef.current) {
+            sceneRef.current = new WheelScene(containerRef.current, sceneProps);
+        } else {
+            sceneRef.current.update(sceneProps);
+        }
+    }, [items, layout, sceneTransform, cardTransform, appearance, interaction, animation, effects]);
+
+    React.useEffect(() => {
+        return () => {
+            if (sceneRef.current) {
+                sceneRef.current.destroy();
+                sceneRef.current = null;
+            }
+        };
+    }, []);
+
+    return (
+        <div style={{ width: "100%", height: "100%", position: "relative" }}>
+            <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+        </div>
+    )
+}
+
+addPropertyControls(Ringfan, {
+    items: {
+        type: ControlType.Array, title: "Items", defaultValue: [],
+        control: { type: ControlType.Object, controls: { image: { type: ControlType.Image, title: "Image" }, link: { type: ControlType.Link, title: "Link" }, openInNewTab: { type: ControlType.Boolean, title: "New Tab", defaultValue: true } } },
+    },
+    layout: {
+        type: ControlType.Object, title: "Layout", defaultValue: defaultLayout,
+        controls: { wheelRadius: { type: ControlType.Number, title: "Wheel Radius", defaultValue: 3.5, min: 0, max: 20, step: 0.1 }, cardWidth: { type: ControlType.Number, title: "Card Width", defaultValue: 1.2, min: 0.1, max: 10, step: 0.1 }, cardHeight: { type: ControlType.Number, title: "Card Height", defaultValue: 1.8, min: 0.1, max: 10, step: 0.1 } },
+    },
+    sceneTransform: {
+        type: ControlType.Object, title: "Scene Transform", defaultValue: defaultSceneTransform,
+        controls: { scale: { type: ControlType.Number, title: "Scale", defaultValue: 1, min: 0.1, max: 5, step: 0.05 }, positionX: { type: ControlType.Number, title: "Position X", defaultValue: 0, min: -10, max: 10, step: 0.1 }, positionY: { type: ControlType.Number, title: "Position Y", defaultValue: 0, min: -10, max: 10, step: 0.1 }, positionZ: { type: ControlType.Number, title: "Position Z", defaultValue: 0, min: -10, max: 10, step: 0.1 }, rotationX: { type: ControlType.Number, title: "Rotation X (Tilt)", defaultValue: 10, min: -90, max: 90, step: 1 }, rotationY: { type: ControlType.Number, title: "Rotation Y", defaultValue: 0, min: -180, max: 180, step: 1 }, rotationZ: { type: ControlType.Number, title: "Rotation Z", defaultValue: 0, min: -90, max: 90, step: 1 } },
+    },
+    cardTransform: {
+        type: ControlType.Object, title: "Card Transform", defaultValue: defaultCardTransform,
+        controls: { rotationX: { type: ControlType.Number, title: "Rotation X", defaultValue: 0, min: -180, max: 180, step: 1 }, rotationY: { type: ControlType.Number, title: "Rotation Y", defaultValue: 0, min: -180, max: 180, step: 1 }, rotationZ: { type: ControlType.Number, title: "Rotation Z", defaultValue: 0, min: -180, max: 180, step: 1 } }
+    },
+    appearance: {
+        type: ControlType.Object, title: "Appearance", defaultValue: defaultAppearance,
+        controls: { backgroundColor: { type: ControlType.Color, title: "Background", defaultValue: "transparent" }, borderRadius: { type: ControlType.Number, title: "Card Radius", defaultValue: 0.05, min: 0, max: 0.5, step: 0.01 }, imageFit: { type: ControlType.Enum, title: "Image Fit", options: ["cover", "fit", "fill"], optionTitles: ["Cover", "Fit", "Fill"], defaultValue: "cover" } },
+    },
+    interaction: {
+        type: ControlType.Object, title: "Interaction", defaultValue: defaultInteraction,
+        controls: {
+            enableScroll: { type: ControlType.Boolean, title: "Enable Scroll", defaultValue: true },
+            dragSensitivity: { type: ControlType.Number, title: "Drag Sensitivity", defaultValue: 1.5, min: 0, max: 10, step: 0.1 },
+            flickSensitivity: { type: ControlType.Number, title: "Flick Sensitivity", defaultValue: 1.0, min: 0, max: 5, step: 0.1 },
+            clickSpeed: { type: ControlType.Number, title: "Click Speed", defaultValue: 0.1, min: 0.01, max: 0.2, step: 0.01 },
+            enableHover: { type: ControlType.Boolean, title: "Enable Hover", defaultValue: true },
+            hoverScale: { type: ControlType.Number, title: "Hover Scale", defaultValue: 1.03, min: 1, max: 2, step: 0.01 },
+            hoverOffsetY: { type: ControlType.Number, title: "Hover Offset Y", defaultValue: 0.4, min: -2, max: 2, step: 0.05 },
+            hoverSlideOut: { type: ControlType.Number, title: "Hover Slide Out", defaultValue: 0.1, min: -2, max: 2, step: 0.05 },
+        }
+    },
+    animation: {
+        type: ControlType.Object, title: "Animation", defaultValue: defaultAnimation,
+        controls: {
+            autoRotate: { type: ControlType.Boolean, title: "Auto Rotate", defaultValue: false },
+            autoRotateDirection: { type: ControlType.Enum, title: "Direction", options: ["right", "left"], optionTitles: ["Right", "Left"], defaultValue: "right" },
+            autoRotateSpeed: { type: ControlType.Number, title: "Speed (deg/s)", defaultValue: 5, min: 0, max: 90, step: 1 },
+            bendingIntensity: { type: ControlType.Number, title: "Bending Intensity", defaultValue: 4, min: 0, max: 20, step: 0.5 },
+            bendingRange: { type: ControlType.Number, title: "Bending Range", defaultValue: 0.8, min: 0, max: 2, step: 0.1 },
+            bendingConstraint: { type: ControlType.Enum, title: "Bending Constraint", options: ["center", "top", "bottom", "left", "right"], optionTitles: ["Center", "Top", "Bottom", "Left", "Right"], defaultValue: "center" },
+        }
+    },
+    effects: {
+        type: ControlType.Object, title: "Effects", defaultValue: defaultEffects,
+        controls: {
+            enableBloom: { type: ControlType.Boolean, title: "Enable Bloom", defaultValue: true },
+            bloomStrength: { type: ControlType.Number, title: "Strength", defaultValue: 0.4, min: 0, max: 3, step: 0.05, hidden: (props) => !props.effects?.enableBloom },
+            bloomRadius: { type: ControlType.Number, title: "Radius", defaultValue: 0.1, min: 0, max: 2, step: 0.05, hidden: (props) => !props.effects?.enableBloom },
+            bloomThreshold: { type: ControlType.Number, title: "Threshold", defaultValue: 0.85, min: 0, max: 1, step: 0.01, hidden: (props) => !props.effects?.enableBloom },
+        }
+    }
+});

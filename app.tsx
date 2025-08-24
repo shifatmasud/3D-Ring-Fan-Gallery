@@ -1,5 +1,5 @@
 import * as React from "react"
-import Ringfan from "./Ringfan.framer"
+import Ringfan from "./component/Ringfan"
 
 // Create 20 unique items for the Ringfan component
 const defaultItems = [
